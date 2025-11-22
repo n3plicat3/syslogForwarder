@@ -215,6 +215,7 @@ class FileTailer(threading.Thread):
         host_name: Optional[str],
         read_from_beginning: bool = False,
         poll_interval: float = 0.25,
+        on_event: Optional[callable] = None,
     ):
         super().__init__(daemon=True)
         self.path = path
@@ -225,6 +226,7 @@ class FileTailer(threading.Thread):
         self.host_name = host_name
         self.read_from_beginning = read_from_beginning
         self.poll_interval = poll_interval
+        self.on_event = on_event
         self._stop = threading.Event()
 
     def stop(self):
@@ -275,6 +277,21 @@ class FileTailer(threading.Thread):
             )
             try:
                 self.sender.send(syslog_msg)
+                if self.on_event is not None:
+                    try:
+                        self.on_event(
+                            {
+                                "type": "line",
+                                "file": str(self.path),
+                                "app": self.app_name,
+                                "facility": self.facility,
+                                "severity": self.severity,
+                                "timestamp": rfc3339_now(),
+                                "message": msg,
+                            }
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 # Drop line on failure
                 pass
@@ -296,6 +313,7 @@ class TailManager:
         read_from_beginning: bool,
         rescan_interval: float,
         directory: Path,
+        on_event: Optional[callable] = None,
     ):
         self.sender = sender
         self.pattern = pattern
@@ -307,6 +325,7 @@ class TailManager:
         self.rescan_interval = rescan_interval
         self.directory = directory
         self.tailers: Dict[Path, FileTailer] = {}
+        self.on_event = on_event
         self._stop = threading.Event()
 
     def _scan(self) -> Set[Path]:
@@ -346,14 +365,37 @@ class TailManager:
             app_name=self.app_name,
             host_name=self.host_name,
             read_from_beginning=self.read_from_beginning,
+            on_event=self.on_event,
         )
         t.start()
         self.tailers[path] = t
+        if self.on_event is not None:
+            try:
+                self.on_event(
+                    {
+                        "type": "start",
+                        "file": str(path),
+                        "timestamp": rfc3339_now(),
+                    }
+                )
+            except Exception:
+                pass
 
     def _stop_tailer(self, path: Path):
         t = self.tailers.pop(path, None)
         if t is not None:
             t.stop()
+        if self.on_event is not None:
+            try:
+                self.on_event(
+                    {
+                        "type": "stop",
+                        "file": str(path),
+                        "timestamp": rfc3339_now(),
+                    }
+                )
+            except Exception:
+                pass
 
 
 # ----------------------------
@@ -512,4 +554,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

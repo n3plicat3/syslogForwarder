@@ -44,3 +44,27 @@ Notes
 - The tool rescans the folder periodically and picks up new `*.log` files.
 - File rotations are handled simply by inode change detection.
 
+Web UI (Flask)
+---------------
+
+A simple web UI is available to start/stop forwarding, upload files, edit configuration, and view live transfer logs.
+
+- Install dependencies (one-time):
+
+```
+python3 -m pip install -r requirements.txt
+```
+
+- Run the UI:
+
+```
+python3 webapp.py
+```
+
+- Open http://localhost:5000 in your browser.
+
+Features:
+- Start/stop the forwarder
+- Upload `.log` files (saved to the current directory)
+- Edit destination/syslog/file settings (saved to `config.json`)
+- Live "sent line" stream via Server-Sent Events (SSE)

@@ -1,0 +1,121 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Syslog Forwarder UI</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+      body { padding: 1rem; }
+      #log { height: 320px; overflow-y: auto; background: #111; color: #ddd; padding: .5rem; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+      .status { font-weight: 600; }
+      .badge { display: inline-block; padding: 0 .4rem; border-radius: .4rem; background: #eee; margin-left: .4rem; font-size: .8rem; }
+      .grid { gap: 1rem; }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h2>Syslog Forwarder</h2>
+
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div>
+            {% for m in messages %}
+              <blockquote>{{ m }}</blockquote>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <section>
+        <div class="grid">
+          <article>
+            <h4>Status</h4>
+            <p class="status">{{ 'Running' if running else 'Stopped' }}</p>
+            <form method="post" action="{{ url_for('start') }}" style="display:inline-block; margin-right: .5rem;">
+              <button type="submit" {{ 'disabled' if running else '' }}>Start</button>
+            </form>
+            <form method="post" action="{{ url_for('stop') }}" style="display:inline-block;">
+              <button type="submit" class="secondary" {{ '' if running else 'disabled' }}>Stop</button>
+            </form>
+          </article>
+          <article>
+            <h4>Destination</h4>
+            <p>
+              Host: <strong>{{ dest.get('host','') }}</strong><br />
+              Port: <strong>{{ dest.get('port','') }}</strong><br />
+              Protocol: <strong>{{ dest.get('protocol','') }}</strong>
+            </p>
+            <p>
+              <a href="{{ url_for('config_view') }}">Edit configuration</a>
+            </p>
+          </article>
+          <article>
+            <h4>Upload a log</h4>
+            <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+              <input type="file" name="file" />
+              <button type="submit">Upload</button>
+            </form>
+            <small>Files are saved to the current directory and tailed if matching pattern.</small>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h4>Watched Files <span class="badge">pattern: {{ cfg.get('files',{}).get('pattern','*.log') }}</span></h4>
+        {% if files %}
+          <ul>
+            {% for f in files %}
+              <li><code>{{ f }}</code> <a href="{{ url_for('downloads', filename=f) }}">download</a></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>No files found matching pattern in current folder.</p>
+        {% endif %}
+      </section>
+
+      <section>
+        <h4>Live Transfer Log</h4>
+        <div id="log"></div>
+      </section>
+    </main>
+
+    <script>
+      const log = document.getElementById('log');
+      function append(line) {
+        const atBottom = (log.scrollTop + log.clientHeight) >= (log.scrollHeight - 5);
+        const div = document.createElement('div');
+        div.textContent = line;
+        log.appendChild(div);
+        if (log.childElementCount > 2000) {
+          for (let i = 0; i < 500; i++) {
+            if (log.firstChild) log.removeChild(log.firstChild);
+          }
+        }
+        if (atBottom) log.scrollTop = log.scrollHeight;
+      }
+
+      function render(evt) {
+        try {
+          const e = JSON.parse(evt.data);
+          if (e.type === 'line') {
+            const sevMap = {0:'emerg',1:'alert',2:'crit',3:'err',4:'warn',5:'notice',6:'info',7:'debug'};
+            const line = `[${e.timestamp}] ${e.file} ${sevMap[e.severity]||e.severity} ${e.app}: ${e.message}`;
+            append(line);
+          } else if (e.type === 'start') {
+            append(`[${e.timestamp}] started tailing ${e.file}`);
+          } else if (e.type === 'stop') {
+            append(`[${e.timestamp}] stopped tailing ${e.file}`);
+          } else if (e.type === 'status') {
+            append(`status: ${e.status}`);
+          }
+        } catch (err) { /* ignore */ }
+      }
+
+      const es = new EventSource('{{ url_for('events') }}');
+      es.onmessage = render;
+      es.onerror = () => {};
+    </script>
+  </body>
+  </html>
+

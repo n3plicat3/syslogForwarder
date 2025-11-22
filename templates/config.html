@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Edit Configuration</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style> body { padding: 1rem; } </style>
+  </head>
+  <body>
+    <main class="container">
+      <h2>Edit Configuration</h2>
+      <form method="post">
+        <article>
+          <h4>Destination</h4>
+          <div class="grid">
+            <label>Host<input name="host" value="{{ cfg.destination.host }}" /></label>
+            <label>Port<input type="number" name="port" value="{{ cfg.destination.port }}" /></label>
+            <label>Protocol
+              <select name="protocol">
+                {% set proto = cfg.destination.protocol %}
+                <option value="udp" {{ 'selected' if proto=='udp' else '' }}>udp</option>
+                <option value="tcp" {{ 'selected' if proto=='tcp' else '' }}>tcp</option>
+                <option value="tls" {{ 'selected' if proto=='tls' else '' }}>tls</option>
+              </select>
+            </label>
+          </div>
+        </article>
+
+        <article>
+          <h4>Files</h4>
+          <div class="grid">
+            <label>Pattern<input name="pattern" value="{{ cfg.files.pattern }}" /></label>
+            <label>Rescan Interval (sec)<input type="number" step="0.1" name="rescan_interval_sec" value="{{ cfg.files.rescan_interval_sec }}" /></label>
+          </div>
+          <label>
+            <input type="checkbox" name="from_beginning" {{ 'checked' if cfg.files.read_from_beginning else '' }} />
+            Read from beginning
+          </label>
+        </article>
+
+        <article>
+          <h4>Syslog</h4>
+          <div class="grid">
+            <label>Facility<input name="facility" value="{{ cfg.syslog.facility }}" /></label>
+            <label>Severity<input name="severity" value="{{ cfg.syslog.severity }}" /></label>
+            <label>App Name<input name="app_name" value="{{ cfg.syslog.app_name }}" /></label>
+            <label>Host Name (override)<input name="host_name" value="{{ cfg.syslog.host_name or '' }}" /></label>
+          </div>
+        </article>
+
+        <article>
+          <h4>TLS (if protocol=tls)</h4>
+          <div class="grid">
+            <label>CA File<input name="ca_file" value="{{ cfg.tls.ca_file or '' }}" /></label>
+            <label>Cert File<input name="cert_file" value="{{ cfg.tls.cert_file or '' }}" /></label>
+            <label>Key File<input name="key_file" value="{{ cfg.tls.key_file or '' }}" /></label>
+            <label>Verify Mode
+              <select name="verify_mode">
+                {% set vm = cfg.tls.verify_mode %}
+                <option value="required" {{ 'selected' if vm=='required' else '' }}>required</option>
+                <option value="optional" {{ 'selected' if vm=='optional' else '' }}>optional</option>
+                <option value="none" {{ 'selected' if vm=='none' else '' }}>none</option>
+              </select>
+            </label>
+          </div>
+        </article>
+
+        <footer>
+          <a href="{{ url_for('index') }}" role="button" class="secondary">Back</a>
+          <button type="submit">Save</button>
+        </footer>
+      </form>
+    </main>
+  </body>
+  </html>
+
