@@ -75,6 +75,50 @@
       </section>
 
       <section>
+        <h4>JSON Simulator & Forwarder</h4>
+        <p>Upload a <code>.json</code> template (object or array of objects). The system generates 100 randomized samples. Use the endpoints below as a fake API server, or forward as syslog at a chosen rate.</p>
+        <div class="grid">
+          <article>
+            <h5>Datasets</h5>
+            {% if json_sets %}
+              <ul>
+                {% for j in json_sets %}
+                  <li>
+                    <strong>{{ j }}</strong>
+                    <div>
+                      Fetch: <code>/api/json/logs/{{ j }}?count=10</code>
+                      &middot; Stream: <code>/api/json/stream/{{ j }}?mps=2</code>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p>No JSON datasets yet. Upload a .json file above.</p>
+            {% endif %}
+          </article>
+          <article>
+            <h5>Forward as Syslog</h5>
+            <form method="post" action="{{ url_for('json_forwarder_start') }}">
+              <label>Dataset
+                <select name="json_name">
+                  {% for j in json_sets %}
+                    <option value="{{ j }}">{{ j }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>Messages per second (mps)
+                <input type="number" step="0.1" name="mps" value="1" />
+              </label>
+              <button type="submit" {{ '' if json_sets else 'disabled' }}>Start Forwarding</button>
+            </form>
+            <form method="post" action="{{ url_for('json_forwarder_stop') }}" style="margin-top:.5rem;">
+              <button type="submit" class="secondary">Stop Forwarding</button>
+            </form>
+          </article>
+        </div>
+      </section>
+
+      <section>
         <h4>Live Transfer Log</h4>
         <div id="log"></div>
       </section>
@@ -102,12 +146,17 @@
             const sevMap = {0:'emerg',1:'alert',2:'crit',3:'err',4:'warn',5:'notice',6:'info',7:'debug'};
             const line = `[${e.timestamp}] ${e.file} ${sevMap[e.severity]||e.severity} ${e.app}: ${e.message}`;
             append(line);
+          } else if (e.type === 'json_line') {
+            const line = `[${e.timestamp}] json-forwarder: ${e.message}`;
+            append(line);
           } else if (e.type === 'start') {
             append(`[${e.timestamp}] started tailing ${e.file}`);
           } else if (e.type === 'stop') {
             append(`[${e.timestamp}] stopped tailing ${e.file}`);
           } else if (e.type === 'status') {
             append(`status: ${e.status}`);
+          } else if (e.type === 'json_forwarder') {
+            append(`json forwarder: ${e.status} ${e.name || ''} ${e.mps || ''}`.trim());
           }
         } catch (err) { /* ignore */ }
       }
@@ -118,4 +167,3 @@
     </script>
   </body>
   </html>
-

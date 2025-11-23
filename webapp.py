@@ -3,6 +3,8 @@ import json
 import os
 import threading
 from collections import deque
+import random
+import time
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Dict, List
@@ -44,6 +46,13 @@ CURRENT_CONFIG: Dict = {}
 # Event broadcasting (simple in-process pub/sub)
 SUBSCRIBERS: List[Queue] = []
 EVENT_HISTORY = deque(maxlen=500)
+
+# JSON simulation/forwarder state
+JSON_TEMPLATES: Dict[str, dict] = {}
+JSON_SAMPLES: Dict[str, list] = {}
+JSON_FORWARDER_THREAD: threading.Thread | None = None
+JSON_FORWARDER_STOP = threading.Event()
+JSON_FORWARDER_CFG: Dict = {}
 
 
 def broadcast_event(evt: Dict):
@@ -132,20 +141,159 @@ def load_current_config() -> Dict:
     return load_config(cfg_path)
 
 
+# ----------------------------
+# JSON helpers
+# ----------------------------
+
+def _rand_like(value):
+    # Generate a random value similar to the input value
+    if isinstance(value, bool):
+        return bool(random.getrandbits(1))
+    if isinstance(value, int):
+        base = value
+        jitter = max(1, abs(base) // 10)
+        return base + random.randint(-jitter, jitter)
+    if isinstance(value, float):
+        base = value
+        jitter = abs(base) * 0.1 if base != 0 else 1.0
+        return round(base + random.uniform(-jitter, jitter), 6)
+    if isinstance(value, str):
+        # Try timestamp-ish replacement if it looks like one
+        if len(value) >= 10 and any(ch.isdigit() for ch in value):
+            # Recent unix timestamp variant
+            now = int(time.time())
+            return str(now - random.randint(0, 3600))
+        # Otherwise random suffix/prefix
+        prefix = value[: max(0, min(len(value), 6))]
+        return f"{prefix}{random.randint(1000, 9999)}"
+    if isinstance(value, dict):
+        return {k: _rand_like(v) for k, v in value.items()}
+    if isinstance(value, list):
+        # Vary length slightly
+        n = len(value)
+        n2 = max(0, min(n + random.randint(-1, 2), n + 2))
+        base = value or ["item"]
+        return [_rand_like(random.choice(base)) for _ in range(n2)]
+    return value
+
+
+def generate_samples_from_template(template: dict, count: int = 100) -> list:
+    samples = []
+    for _ in range(count):
+        def mutate(obj):
+            if isinstance(obj, dict):
+                return {k: mutate(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [mutate(v) for v in obj]
+            return _rand_like(obj)
+
+        samples.append(mutate(template))
+    return samples
+
+
+def ensure_json_loaded():
+    # Load any .json files in CWD as templates if not already loaded
+    for p in Path.cwd().glob("*.json"):
+        name = p.stem
+        if name not in JSON_TEMPLATES:
+            try:
+                with open(p, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                # If array, take first object as template; else object
+                if isinstance(data, list) and data:
+                    data = data[0]
+                if isinstance(data, dict):
+                    JSON_TEMPLATES[name] = data
+                    JSON_SAMPLES[name] = generate_samples_from_template(data, 100)
+            except Exception:
+                continue
+
+
+def start_json_forwarder(name: str, mps: float):
+    global JSON_FORWARDER_THREAD
+    ensure_json_loaded()
+    if name not in JSON_SAMPLES:
+        raise ValueError("Unknown json template name")
+    if JSON_FORWARDER_THREAD is not None and JSON_FORWARDER_THREAD.is_alive():
+        return
+
+    JSON_FORWARDER_STOP.clear()
+
+    cfg = CURRENT_CONFIG or load_current_config()
+    JSON_FORWARDER_CFG.update({
+        "name": name,
+        "mps": mps,
+    })
+
+    def run():
+        try:
+            sender = build_sender(cfg)
+            syslog_cfg = cfg.get("syslog", {})
+            facility = FACILITY_MAP.get((syslog_cfg.get("facility") or "user"), 1)
+            severity = SEVERITY_MAP.get((syslog_cfg.get("severity") or "info"), 6)
+            app_name = (syslog_cfg.get("app_name") or "json-forwarder")
+            host_name = syslog_cfg.get("host_name") or None
+            procid = str(os.getpid())
+            idx = 0
+            period = 1.0 / max(0.1, float(mps))
+            broadcast_event({"type": "json_forwarder", "status": "started", "name": name, "mps": mps})
+            samples = JSON_SAMPLES[name]
+            while not JSON_FORWARDER_STOP.is_set():
+                payload = samples[idx % len(samples)]
+                msg = json.dumps(payload, separators=(",", ":"))
+                pri = facility * 8 + severity
+                timestamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).astimezone().isoformat()
+                hostname = host_name or os.uname().nodename
+                version = 1
+                syslog_msg = f"<{pri}>{version} {timestamp} {hostname} {app_name} {procid} - - {msg}"
+                try:
+                    sender.send(syslog_msg)
+                    broadcast_event({"type": "json_line", "timestamp": timestamp, "app": app_name, "message": msg})
+                except Exception:
+                    pass
+                idx += 1
+                time.sleep(period)
+        finally:
+            try:
+                sender.close()
+            except Exception:
+                pass
+            broadcast_event({"type": "json_forwarder", "status": "stopped", "name": name})
+
+    JSON_FORWARDER_THREAD = threading.Thread(target=run, daemon=True)
+    JSON_FORWARDER_THREAD.start()
+
+
+def stop_json_forwarder():
+    JSON_FORWARDER_STOP.set()
+    if JSON_FORWARDER_THREAD is not None:
+        JSON_FORWARDER_THREAD.join(timeout=2.0)
+
+
 @app.route("/")
 def index():
     cfg = CURRENT_CONFIG or load_current_config()
     files_cfg = cfg.get("files", {})
     pattern = files_cfg.get("pattern", "*.log")
     directory = Path.cwd()
-    files = sorted([str(p.name) for p in directory.glob(pattern)])
+    patterns = [p.strip() for p in str(pattern).split(',') if p.strip()]
+    if not patterns:
+        patterns = ['*.log']
+    seen = set()
+    for pat in patterns:
+        for p in directory.glob(pat):
+            seen.add(str(p.name))
+    files = sorted(list(seen))
     dest = cfg.get("destination", {})
+    ensure_json_loaded()
+    json_sets = sorted(list(JSON_TEMPLATES.keys()))
     return render_template(
         "index.html",
         running=is_running(),
         cfg=cfg,
         files=files,
         dest=dest,
+        json_sets=json_sets,
     )
 
 
@@ -173,7 +321,24 @@ def upload():
     filename = secure_filename(f.filename)
     target = Path.cwd() / filename
     f.save(str(target))
-    flash(f"Uploaded {filename}.")
+    # If JSON file, load as template and generate default samples
+    if filename.lower().endswith(".json"):
+        try:
+            with open(target, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, list) and data:
+                data = data[0]
+            if isinstance(data, dict):
+                name = Path(filename).stem
+                JSON_TEMPLATES[name] = data
+                JSON_SAMPLES[name] = generate_samples_from_template(data, 100)
+                flash(f"Uploaded and prepared JSON template '{name}' with 100 samples.")
+            else:
+                flash("JSON must be an object or array of objects.")
+        except Exception as e:
+            flash(f"Failed to parse JSON: {e}")
+    else:
+        flash(f"Uploaded {filename}.")
     return redirect(url_for("index"))
 
 
@@ -228,6 +393,71 @@ def config_view():
     return render_template("config.html", cfg=cfg)
 
 
+# ----------------------------
+# JSON API endpoints (fake API server)
+# ----------------------------
+
+@app.route("/api/json/logs/<name>")
+def api_json_logs(name: str):
+    ensure_json_loaded()
+    count = int(request.args.get("count", 10))
+    name = secure_filename(name)
+    if name not in JSON_SAMPLES:
+        return {"error": "unknown dataset"}, 404
+    samples = JSON_SAMPLES[name]
+    # Rotate through samples to simulate ongoing variety
+    start = random.randint(0, max(0, len(samples) - 1))
+    out = [samples[(start + i) % len(samples)] for i in range(max(1, min(count, 1000)))]
+    return Response(json.dumps(out), mimetype="application/json")
+
+
+@app.route("/api/json/stream/<name>")
+def api_json_stream(name: str):
+    ensure_json_loaded()
+    name = secure_filename(name)
+    if name not in JSON_SAMPLES:
+        return {"error": "unknown dataset"}, 404
+    mps = float(request.args.get("mps", 1))
+    period = 1.0 / max(0.1, mps)
+
+    def gen():
+        idx = 0
+        while True:
+            payload = JSON_SAMPLES[name][idx % len(JSON_SAMPLES[name])]
+            data = json.dumps(payload)
+            yield f"data: {data}\n\n"
+            idx += 1
+            time.sleep(period)
+
+    return Response(gen(), mimetype="text/event-stream")
+
+
+# ----------------------------
+# JSON forwarder controls
+# ----------------------------
+
+@app.route("/json_forwarder/start", methods=["POST"])
+def json_forwarder_start():
+    name = request.form.get("json_name")
+    mps = float(request.form.get("mps", 1))
+    if not name:
+        flash("Select a JSON dataset.")
+        return redirect(url_for("index"))
+    try:
+        start_json_forwarder(name, mps)
+        flash(f"JSON forwarder started for '{name}' at {mps} mps.")
+    except Exception as e:
+        flash(f"Failed to start JSON forwarder: {e}")
+    return redirect(url_for("index"))
+
+
+@app.route("/json_forwarder/stop", methods=["POST"])
+def json_forwarder_stop():
+    stop_json_forwarder()
+    flash("JSON forwarder stopped.")
+    return redirect(url_for("index"))
+
+
 @app.route("/events")
 def events():
     # Server-Sent Events endpoint
@@ -278,4 +508,3 @@ def create_app():
 if __name__ == "__main__":
     CURRENT_CONFIG = load_current_config()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
-

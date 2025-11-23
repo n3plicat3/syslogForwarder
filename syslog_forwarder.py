@@ -329,7 +329,15 @@ class TailManager:
         self._stop = threading.Event()
 
     def _scan(self) -> Set[Path]:
-        return set(self.directory.glob(self.pattern))
+        # Support comma-separated patterns for "various log files"
+        patterns = [p.strip() for p in str(self.pattern).split(",") if p.strip()]
+        if not patterns:
+            patterns = ["*.log"]
+        found: Set[Path] = set()
+        for pat in patterns:
+            for p in self.directory.glob(pat):
+                found.add(p)
+        return found
 
     def start(self):
         # Start existing files
