@@ -3,124 +3,197 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Syslog Forwarder UI</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <title>Syslog Forwarder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-      body { padding: 1rem; }
-      #log { height: 320px; overflow-y: auto; background: #111; color: #ddd; padding: .5rem; border-radius: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
-      .status { font-weight: 600; }
-      .badge { display: inline-block; padding: 0 .4rem; border-radius: .4rem; background: #eee; margin-left: .4rem; font-size: .8rem; }
-      .grid { gap: 1rem; }
+      :root {
+        --bg: #0a0a0a;
+        --card: #141414;
+        --muted: #9a9a9a;
+        --text: #f5f5f5;
+        --border: #232323;
+        --accent: #ffffff;
+        --danger: #ff5252;
+        --success: #30d158;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0; background: var(--bg); color: var(--text);
+        font-family: 'Noto Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+      }
+      a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+      header { padding: 20px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+      .brand { font-weight: 700; letter-spacing: .3px; }
+      .status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; color: var(--muted); }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+      .dot.running { background: var(--success); box-shadow: 0 0 0 3px rgba(48,209,88,.15); }
+
+      main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+      .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+      .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }
+      @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } .cards { grid-template-columns: 1fr; } }
+
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+      .card h3, .card h4 { margin: 0 0 8px; font-size: 16px; font-weight: 700; letter-spacing: .2px; }
+      .sub { color: var(--muted); font-size: 12px; }
+
+      .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      button, .btn {
+        background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-weight: 600; cursor: pointer;
+      }
+      button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+      button.secondary { opacity: .85; }
+      button:disabled { opacity: .5; cursor: not-allowed; }
+
+      #log { height: 440px; overflow-y: auto; background: #0e0e0e; color: #e6e6e6; padding: 10px; border-radius: 10px; border: 1px dashed var(--border);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+      #log .line { white-space: pre-wrap; line-height: 1.45; }
+
+      .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; }
+      .kv div:nth-child(odd) { color: var(--muted); }
+
+      .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); }
+
+      .file-list { list-style: none; padding: 0; margin: 8px 0 0; }
+      .file-list li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+      .file-list code { color: #eaeaea; }
+
+      .upload { border: 1px dashed var(--border); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+      .progress { height: 6px; background: #1c1c1c; border-radius: 999px; overflow: hidden; border: 1px solid var(--border); }
+      .progress > span { display: block; height: 100%; width: 0%; background: var(--text); transition: width .2s ease; }
+      .hint { color: var(--muted); font-size: 12px; }
+      .toast { margin-top: 6px; font-size: 12px; color: var(--muted); }
+
+      .flash { margin: 12px 24px; }
+      .flash blockquote { margin: 0 0 8px; padding: 8px 12px; border-left: 3px solid var(--border); color: var(--muted); }
     </style>
   </head>
   <body>
-    <main class="container">
-      <h2>Syslog Forwarder</h2>
+    <header>
+      <div class="brand">Syslog Forwarder</div>
+      <div class="status-pill">
+        <span id="statusDot" class="dot {{ 'running' if running else '' }}"></span>
+        <span id="statusText">{{ 'Running' if running else 'Stopped' }}</span>
+      </div>
+    </header>
 
-      {% with messages = get_flashed_messages() %}
-        {% if messages %}
-          <div>
-            {% for m in messages %}
-              <blockquote>{{ m }}</blockquote>
-            {% endfor %}
-          </div>
-        {% endif %}
-      {% endwith %}
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash">
+          {% for m in messages %}
+            <blockquote>{{ m }}</blockquote>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
 
-      <section>
-        <div class="grid">
-          <article>
-            <h4>Status</h4>
-            <p class="status">{{ 'Running' if running else 'Stopped' }}</p>
-            <form method="post" action="{{ url_for('start') }}" style="display:inline-block; margin-right: .5rem;">
-              <button type="submit" {{ 'disabled' if running else '' }}>Start</button>
+    <main>
+      <section class="grid">
+        <article class="card">
+          <h3>Live Log</h3>
+          <div class="sub">Recent forwarded lines and system events</div>
+          <div id="log" aria-live="polite" aria-label="Live log"></div>
+        </article>
+        <article class="card">
+          <h3>Controls</h3>
+          <div class="sub">Start/stop and destination</div>
+          <div class="controls" style="margin: 8px 0 12px;">
+            <form method="post" action="{{ url_for('start') }}">
+              <button type="submit" class="primary" {{ 'disabled' if running else '' }}>Start</button>
             </form>
-            <form method="post" action="{{ url_for('stop') }}" style="display:inline-block;">
+            <form method="post" action="{{ url_for('stop') }}">
               <button type="submit" class="secondary" {{ '' if running else 'disabled' }}>Stop</button>
             </form>
-          </article>
-          <article>
-            <h4>Destination</h4>
-            <p>
-              Host: <strong>{{ dest.get('host','') }}</strong><br />
-              Port: <strong>{{ dest.get('port','') }}</strong><br />
-              Protocol: <strong>{{ dest.get('protocol','') }}</strong>
-            </p>
-            <p>
-              <a href="{{ url_for('config_view') }}">Edit configuration</a>
-            </p>
-          </article>
-          <article>
-            <h4>Upload a log</h4>
-            <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
-              <input type="file" name="file" />
-              <button type="submit">Upload</button>
+            <a class="btn" href="{{ url_for('config_view') }}">Edit Config</a>
+          </div>
+          <div class="kv">
+            <div>Host</div><div>{{ dest.get('host','') }}</div>
+            <div>Port</div><div>{{ dest.get('port','') }}</div>
+            <div>Protocol</div><div>{{ dest.get('protocol','') }}</div>
+          </div>
+        </article>
+      </section>
+
+      <section class="cards">
+        <article class="card">
+          <h4>Upload Log or JSON</h4>
+          <div class="upload">
+            <form id="uploadForm" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+              <input id="fileInput" type="file" name="file" />
+              <div class="controls">
+                <button id="uploadBtn" type="submit" class="primary">Upload</button>
+                <span id="uploadHint" class="hint">Files save to current folder; tailed if they match the pattern.</span>
+              </div>
+              <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Upload progress" hidden>
+                <span></span>
+              </div>
+              <div id="uploadToast" class="toast" aria-live="polite"></div>
             </form>
-            <small>Files are saved to the current directory and tailed if matching pattern.</small>
-          </article>
-        </div>
-      </section>
+          </div>
+        </article>
 
-      <section>
-        <h4>Watched Files <span class="badge">pattern: {{ cfg.get('files',{}).get('pattern','*.log') }}</span></h4>
-        {% if files %}
-          <ul>
-            {% for f in files %}
-              <li><code>{{ f }}</code> <a href="{{ url_for('downloads', filename=f) }}">download</a></li>
-            {% endfor %}
-          </ul>
-        {% else %}
-          <p>No files found matching pattern in current folder.</p>
-        {% endif %}
-      </section>
+        <article class="card">
+          <h4>Watched Files <span class="badge">pattern: {{ cfg.get('files',{}).get('pattern','*.log') }}</span></h4>
+          {% if files %}
+            <ul class="file-list">
+              {% for f in files %}
+                <li>
+                  <code>{{ f }}</code>
+                  <a class="btn" href="{{ url_for('downloads', filename=f) }}">Download</a>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="hint">No files match in the current folder.</div>
+          {% endif %}
+        </article>
 
-      <section>
-        <h4>JSON Simulator & Forwarder</h4>
-        <p>Upload a <code>.json</code> template (object or array of objects). The system generates 100 randomized samples. Use the endpoints below as a fake API server, or forward as syslog at a chosen rate.</p>
-        <div class="grid">
-          <article>
-            <h5>Datasets</h5>
-            {% if json_sets %}
-              <ul>
-                {% for j in json_sets %}
-                  <li>
-                    <strong>{{ j }}</strong>
-                    <div>
-                      Fetch: <code>/api/json/logs/{{ j }}?count=10</code>
-                      &middot; Stream: <code>/api/json/stream/{{ j }}?mps=2</code>
-                    </div>
-                  </li>
-                {% endfor %}
-              </ul>
-            {% else %}
-              <p>No JSON datasets yet. Upload a .json file above.</p>
-            {% endif %}
-          </article>
-          <article>
-            <h5>Forward as Syslog</h5>
-            <form method="post" action="{{ url_for('json_forwarder_start') }}">
-              <label>Dataset
-                <select name="json_name">
+        <article class="card">
+          <h4>JSON Simulator</h4>
+          <div class="hint">Upload a .json template to generate samples or forward as syslog.</div>
+          <div style="margin-top:10px; display:grid; gap:10px;">
+            <div>
+              <div class="sub" style="margin-bottom:6px;">Datasets</div>
+              {% if json_sets %}
+                <ul class="file-list" style="margin-top:0;">
                   {% for j in json_sets %}
-                    <option value="{{ j }}">{{ j }}</option>
+                    <li>
+                      <strong>{{ j }}</strong>
+                      <div class="sub">/api/json/logs/{{ j }}?count=10 · /api/json/stream/{{ j }}?mps=2</div>
+                    </li>
                   {% endfor %}
-                </select>
-              </label>
-              <label>Messages per second (mps)
-                <input type="number" step="0.1" name="mps" value="1" />
-              </label>
-              <button type="submit" {{ '' if json_sets else 'disabled' }}>Start Forwarding</button>
-            </form>
-            <form method="post" action="{{ url_for('json_forwarder_stop') }}" style="margin-top:.5rem;">
-              <button type="submit" class="secondary">Stop Forwarding</button>
-            </form>
-          </article>
-        </div>
-      </section>
-
-      <section>
-        <h4>Live Transfer Log</h4>
-        <div id="log"></div>
+                </ul>
+              {% else %}
+                <div class="hint">No JSON datasets yet. Upload a .json file.</div>
+              {% endif %}
+            </div>
+            <div>
+              <div class="sub" style="margin-bottom:6px;">Forward as Syslog</div>
+              <form method="post" action="{{ url_for('json_forwarder_start') }}" style="display:grid; gap:8px;">
+                <label>Dataset
+                  <select name="json_name" style="width:100%; background: #0f0f0f; color: var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
+                    {% for j in json_sets %}
+                      <option value="{{ j }}">{{ j }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>Messages per second
+                  <input type="number" step="0.1" name="mps" value="1" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+                </label>
+                <div class="controls">
+                  <button type="submit" class="primary" {{ '' if json_sets else 'disabled' }}>Start</button>
+                </div>
+              </form>
+              <form method="post" action="{{ url_for('json_forwarder_stop') }}" class="controls">
+                <button type="submit" class="secondary">Stop</button>
+              </form>
+            </div>
+          </div>
+        </article>
       </section>
     </main>
 
@@ -129,6 +202,7 @@
       function append(line) {
         const atBottom = (log.scrollTop + log.clientHeight) >= (log.scrollHeight - 5);
         const div = document.createElement('div');
+        div.className = 'line';
         div.textContent = line;
         log.appendChild(div);
         if (log.childElementCount > 2000) {
@@ -155,8 +229,20 @@
             append(`[${e.timestamp}] stopped tailing ${e.file}`);
           } else if (e.type === 'status') {
             append(`status: ${e.status}`);
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            if (dot) {
+              if (e.status === 'started') dot.classList.add('running');
+              if (e.status === 'stopped') dot.classList.remove('running');
+            }
+            if (text) text.textContent = (e.status === 'started') ? 'Running' : 'Stopped';
           } else if (e.type === 'json_forwarder') {
             append(`json forwarder: ${e.status} ${e.name || ''} ${e.mps || ''}`.trim());
+          } else if (e.type === 'upload') {
+            const size = (e.size || 0);
+            append(`upload: ${e.filename} (${size} bytes)`);
+            const toast = document.getElementById('uploadToast');
+            if (toast) toast.textContent = `Uploaded ${e.filename}`;
           }
         } catch (err) { /* ignore */ }
       }
@@ -164,6 +250,55 @@
       const es = new EventSource('{{ url_for('events') }}');
       es.onmessage = render;
       es.onerror = () => {};
+
+      // Upload with progress
+      const form = document.getElementById('uploadForm');
+      const fileInput = document.getElementById('fileInput');
+      const progress = form ? form.querySelector('.progress') : null;
+      const bar = progress ? progress.querySelector('span') : null;
+      const toast = document.getElementById('uploadToast');
+      const uploadBtn = document.getElementById('uploadBtn');
+
+      if (form) {
+        form.addEventListener('submit', (ev) => {
+          ev.preventDefault();
+          if (!fileInput.files || !fileInput.files[0]) {
+            if (toast) toast.textContent = 'Choose a file first.';
+            return;
+          }
+          const fd = new FormData();
+          fd.append('file', fileInput.files[0]);
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', form.action, true);
+          xhr.upload.onprogress = (e) => {
+            if (!progress || !bar) return;
+            progress.hidden = false;
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 100);
+              bar.style.width = pct + '%';
+              progress.setAttribute('aria-valuenow', String(pct));
+            }
+          };
+          xhr.onreadystatechange = () => {
+            if (xhr.readyState === 4) {
+              if (progress && bar) {
+                bar.style.width = '100%';
+                progress.setAttribute('aria-valuenow', '100');
+                setTimeout(() => { progress.hidden = true; bar.style.width = '0%'; }, 600);
+              }
+              if (xhr.status >= 200 && xhr.status < 300) {
+                if (toast) toast.textContent = 'Upload complete. Waiting for tailer...';
+                fileInput.value = '';
+              } else {
+                if (toast) toast.textContent = 'Upload failed.';
+              }
+            }
+          };
+          if (uploadBtn) uploadBtn.disabled = true;
+          xhr.onloadend = () => { if (uploadBtn) uploadBtn.disabled = false; };
+          xhr.send(fd);
+        });
+      }
     </script>
   </body>
   </html>

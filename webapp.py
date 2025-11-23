@@ -321,6 +321,10 @@ def upload():
     filename = secure_filename(f.filename)
     target = Path.cwd() / filename
     f.save(str(target))
+    try:
+        sz = target.stat().st_size
+    except Exception:
+        sz = None
     # If JSON file, load as template and generate default samples
     if filename.lower().endswith(".json"):
         try:
@@ -339,6 +343,11 @@ def upload():
             flash(f"Failed to parse JSON: {e}")
     else:
         flash(f"Uploaded {filename}.")
+    # Emit an event so the UI can show upload confirmation in Live Log
+    try:
+        broadcast_event({"type": "upload", "filename": filename, "size": sz})
+    except Exception:
+        pass
     return redirect(url_for("index"))
 
 
