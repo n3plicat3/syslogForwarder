@@ -38,13 +38,13 @@ EXPOSE 5030
 # uploads, config.json and tailed files live on the mounted volume.
 #
 # The Flask app factory is webapp:create_app()
-CMD [
-  "gunicorn",
-  "--workers", "2",
-  "--threads", "4",
-  "--bind", "0.0.0.0:5030",
-  "--timeout", "0",
-  "webapp:create_app"
+CMD [ \
+  "gunicorn", \
+  "--workers", "2", \
+  "--threads", "4", \
+  "--bind", "0.0.0.0:5030", \
+  "--timeout", "0", \
+  "webapp:create_app" \
 ]
 
 #
