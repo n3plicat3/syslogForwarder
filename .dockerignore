@@ -1,0 +1,15 @@
+.git
+.github
+__pycache__
+venv
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.swp
+*.swo
+Dockerfile*
+docker-compose*.yml
+normalized_file.json
+.DS_Store
+

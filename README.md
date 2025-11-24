@@ -118,3 +118,88 @@ Limitations
 License
 -------
 This project is provided as‑is for demonstration and testing purposes.
+
+Docker
+------
+Run the full application (web UI + CLI forwarder + JSON simulator) in a container. The application reads and writes files from its current working directory; the image is set up to use `/data` for that, so you can mount a host folder to persist `config.json`, uploads, and the files you want to tail.
+
+Build the image:
+
+```
+docker build -t syslog-forwarder:latest .
+```
+
+Run the web UI:
+
+```
+mkdir -p ./data
+docker run --rm -it \
+  -p 5030:5030 \
+  -e PORT=5030 \
+  -e FLASK_SECRET_KEY=change-me \
+  -v "$(pwd)/data:/data" \
+  --name syslog-forwarder \
+  syslog-forwarder:latest
+```
+
+Then open `http://localhost:5030`.
+
+What goes into `./data`:
+- `config.json`: configuration file (created/updated via the UI)
+- `*.log`: any log files to be tailed and forwarded
+- `*.json`: JSON templates for the simulator and JSON forwarder
+- TLS files referenced from `config.json` (e.g., `ca.pem`, `client.crt`, `client.key`)
+
+Forward logs from the host:
+- Put or mount your logs under `./data` on the host; they appear in the container at `/data` and will be matched against `files.pattern` from `config.json` (default: `*.log`).
+
+Use the CLI forwarder (no UI):
+
+```
+docker run --rm -it \
+  -v "$(pwd)/data:/data" \
+  --name forwarder-cli \
+  syslog-forwarder:latest \
+  python /app/syslog_forwarder.py --config config.json
+```
+
+TLS to a remote syslog server:
+1. Place your CA and optional client cert/key into `./data` (e.g., `ca.pem`, `client.crt`, `client.key`).
+2. In the UI (Config), set `destination.protocol` to `tls`, `tls.ca_file` to `ca.pem`, and optionally `tls.cert_file`/`tls.key_file`. Set `tls.verify_mode` as needed (recommended: `required`).
+
+docker-compose (optional):
+
+```
+version: "3.8"
+services:
+  syslog-forwarder:
+    build: .
+    image: syslog-forwarder:latest
+    container_name: syslog-forwarder
+    environment:
+      - PORT=5030
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me}
+    ports:
+      - "5030:5030"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+```
+
+Start with compose:
+
+```
+docker compose up --build
+```
+
+Override to run CLI forwarder in compose:
+
+```
+# In docker-compose.yml under the service:
+command: ["python", "/app/syslog_forwarder.py", "--config", "config.json"]
+```
+
+Notes
+- The container runs as a non-root user (`uid 10000`); ensure the mounted `./data` directory is writable by your user on the host.
+- The web UI writes uploads and config changes to `/data`. The forwarder watches `/data` only (non-recursive).
+- The image includes `gunicorn` to serve the Flask app in production mode. SSE endpoints are supported with threaded workers.
