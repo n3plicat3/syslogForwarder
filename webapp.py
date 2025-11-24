@@ -12,7 +12,6 @@ from typing import Dict, List
 from flask import (
     Flask,
     Response,
-    flash,
     redirect,
     render_template,
     request,
@@ -31,7 +30,10 @@ from syslog_forwarder import (
 
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret")
+"""
+Flask secret key and any passwords are intentionally not used.
+The UI avoids session/flash features so no secret is required.
+"""
 
 
 # ----------------------------
@@ -301,14 +303,12 @@ def index():
 def start():
     cfg = CURRENT_CONFIG or load_current_config()
     start_forwarder(cfg)
-    flash("Forwarder started.")
     return redirect(url_for("index"))
 
 
 @app.route("/stop", methods=["POST"])
 def stop():
     stop_forwarder()
-    flash("Forwarder stopped.")
     return redirect(url_for("index"))
 
 
@@ -316,7 +316,6 @@ def stop():
 def upload():
     f = request.files.get("file")
     if not f or f.filename == "":
-        flash("No file selected.")
         return redirect(url_for("index"))
     filename = secure_filename(f.filename)
     target = Path.cwd() / filename
@@ -336,13 +335,12 @@ def upload():
                 name = Path(filename).stem
                 JSON_TEMPLATES[name] = data
                 JSON_SAMPLES[name] = generate_samples_from_template(data, 100)
-                flash(f"Uploaded and prepared JSON template '{name}' with 100 samples.")
             else:
-                flash("JSON must be an object or array of objects.")
+                # Invalid JSON structure for template; ignore
+                pass
         except Exception as e:
-            flash(f"Failed to parse JSON: {e}")
-    else:
-        flash(f"Uploaded {filename}.")
+            # Parsing failed; ignore flash
+            pass
     # Emit an event so the UI can show upload confirmation in Live Log
     try:
         broadcast_event({"type": "upload", "filename": filename, "size": sz})
@@ -395,7 +393,6 @@ def config_view():
                 global CURRENT_CONFIG
                 CURRENT_CONFIG = cfg
 
-        flash("Configuration saved.")
         return redirect(url_for("index"))
 
     cfg = CURRENT_CONFIG or load_current_config()
@@ -450,20 +447,18 @@ def json_forwarder_start():
     name = request.form.get("json_name")
     mps = float(request.form.get("mps", 1))
     if not name:
-        flash("Select a JSON dataset.")
         return redirect(url_for("index"))
     try:
         start_json_forwarder(name, mps)
-        flash(f"JSON forwarder started for '{name}' at {mps} mps.")
     except Exception as e:
-        flash(f"Failed to start JSON forwarder: {e}")
+        # Start failed; just fall through to index
+        pass
     return redirect(url_for("index"))
 
 
 @app.route("/json_forwarder/stop", methods=["POST"])
 def json_forwarder_stop():
     stop_json_forwarder()
-    flash("JSON forwarder stopped.")
     return redirect(url_for("index"))
 
 

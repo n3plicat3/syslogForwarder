@@ -6,7 +6,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=5030 \
-    FLASK_SECRET_KEY=change-me-in-prod \
     PYTHONPATH=/app
 
 # System deps (none strictly required; keep image slim)

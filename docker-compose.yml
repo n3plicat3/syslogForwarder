@@ -5,9 +5,6 @@ services:
     build: .
     image: syslog-forwarder:latest
     container_name: syslog-forwarder
-    environment:
-      - PORT=5030
-      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me}
     ports:
       - "5030:5030"
     volumes:
@@ -16,4 +13,3 @@ services:
 
     # Example of overriding the command to run the CLI forwarder only:
     # command: ["python", "/app/syslog_forwarder.py", "--config", "config.json"]
-

@@ -89,7 +89,6 @@ Project Layout
 Environment Variables
 ---------------------
 - `PORT`: web UI port (default: `5030`).
-- `FLASK_SECRET_KEY`: set to a strong value in production.
 
 Troubleshooting
 ---------------
@@ -121,7 +120,14 @@ This project is provided as‑is for demonstration and testing purposes.
 
 Docker
 ------
-Run the full application (web UI + CLI forwarder + JSON simulator) in a container. The application reads and writes files from its current working directory; the image is set up to use `/data` for that, so you can mount a host folder to persist `config.json`, uploads, and the files you want to tail.
+Run the full application (web UI + CLI forwarder + JSON simulator) in a container. The application reads and writes files from its current working directory; the image is set up to use `/data` for that, so you can mount a host folder to persist `config.json`, uploads, and the files you want to tail. No secrets or passwords are required.
+
+Remove any existing image (optional):
+
+```
+docker rm -f syslog-forwarder || true
+docker rmi -f syslog-forwarder:latest || true
+```
 
 Build the image:
 
@@ -129,14 +135,12 @@ Build the image:
 docker build -t syslog-forwarder:latest .
 ```
 
-Run the web UI:
+Run the web UI (ports + volume only):
 
 ```
 mkdir -p ./data
 docker run --rm -it \
   -p 5030:5030 \
-  -e PORT=5030 \
-  -e FLASK_SECRET_KEY=change-me \
   -v "$(pwd)/data:/data" \
   --name syslog-forwarder \
   syslog-forwarder:latest
@@ -176,9 +180,6 @@ services:
     build: .
     image: syslog-forwarder:latest
     container_name: syslog-forwarder
-    environment:
-      - PORT=5030
-      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-change-me}
     ports:
       - "5030:5030"
     volumes:
@@ -203,3 +204,4 @@ Notes
 - The container runs as a non-root user (`uid 10000`); ensure the mounted `./data` directory is writable by your user on the host.
 - The web UI writes uploads and config changes to `/data`. The forwarder watches `/data` only (non-recursive).
 - The image includes `gunicorn` to serve the Flask app in production mode. SSE endpoints are supported with threaded workers.
+- No Flask secret key or passwords are used; the UI avoids session/flash features.

@@ -81,15 +81,7 @@
       </div>
     </header>
 
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <div class="flash">
-          {% for m in messages %}
-            <blockquote>{{ m }}</blockquote>
-          {% endfor %}
-        </div>
-      {% endif %}
-    {% endwith %}
+    <!-- Flash messages removed: no sessions or secrets used. -->
 
     <main>
       <section class="grid">
