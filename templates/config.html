@@ -62,9 +62,10 @@
 
     <section class="card" style="margin-bottom:16px;">
       <h4 style="margin:0 0 8px;">Webhook Defaults</h4>
-      {% set wh = cfg.webhook %}
+      {# Safely handle missing webhook section #}
+      {% set wh = cfg.get('webhook', {}) %}
       <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px;">
-        <label>URL<input name="webhook_url" value="{{ wh.url or '' }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>URL<input name="webhook_url" value="{{ (wh.url if wh else '') or '' }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
         <label>Method
           <select name="webhook_method" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;">
             {% set wm = (wh.method or 'POST') if wh else 'POST' %}

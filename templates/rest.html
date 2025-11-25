@@ -5,10 +5,12 @@
     <div class="hint">Upload a .json file (object or array) to create a dataset. Use the paginated endpoint to fetch items.</div>
     <div style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; margin-top:12px;">
       <div>
-        <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="controls">
-          <input type="file" name="file" />
-          <button type="submit" class="primary">Upload JSON</button>
-        </form>
+        <div class="upload-box" id="uploadBoxRest">
+          <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="controls" id="uploadFormRest">
+            <input type="file" name="file" />
+            <button type="submit" class="primary">Upload JSON</button>
+          </form>
+        </div>
         <div style="margin-top:12px;">
           <strong>Datasets</strong>
           {% if json_sets %}
@@ -64,6 +66,19 @@
         }
       });
     }
+    // Jiggle upload box briefly before submitting
+    (function() {
+      const form = document.getElementById('uploadFormRest');
+      const box = document.getElementById('uploadBoxRest');
+      if (form && box) {
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          box.classList.remove('shake');
+          void box.offsetWidth;
+          box.classList.add('shake');
+          setTimeout(() => form.submit(), 280);
+        });
+      }
+    })();
   </script>
 {% endblock %}
-

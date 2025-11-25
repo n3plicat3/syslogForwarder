@@ -29,11 +29,11 @@
   <section style="display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; margin-top:16px;">
     <article class="card">
       <h4 style="margin:0 0 8px;">Upload Log or JSON</h4>
-      <div style="border:1px dashed var(--border); border-radius:12px; padding:12px; display:grid; gap:8px;">
-        <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+      <div class="upload-box" id="uploadBoxSyslog">
+        <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" id="uploadFormSyslog">
           <input type="file" name="file" />
           <div class="controls">
-            <button type="submit" class="primary">Upload</button>
+            <button type="submit" class="primary" id="uploadBtnSyslog">Upload</button>
             <span class="hint">.log files are tailed; .json appear under REST/Webhook.</span>
           </div>
         </form>
@@ -107,6 +107,20 @@
         if (d.type && d.type.startsWith('webhook')) { append(`[webhook] ${d.type}`); }
       } catch (_) {}
     };
+    // Jiggle upload box briefly before submitting
+    (function() {
+      const form = document.getElementById('uploadFormSyslog');
+      const box = document.getElementById('uploadBoxSyslog');
+      if (form && box) {
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          box.classList.remove('shake');
+          // Force reflow to restart animation
+          void box.offsetWidth;
+          box.classList.add('shake');
+          setTimeout(() => form.submit(), 280);
+        });
+      }
+    })();
   </script>
 {% endblock %}
-

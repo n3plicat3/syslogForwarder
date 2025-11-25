@@ -8,28 +8,76 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-      :root { --bg:#0a0a0a; --card:#141414; --muted:#9a9a9a; --text:#f5f5f5; --border:#232323; --accent:#ffffff; --danger:#ff5252; --success:#30d158; }
+      :root {
+        --bg:#0a0a0a; --card:#141414; --muted:#9a9a9a; --text:#f5f5f5; --border:#232323;
+        --accent:#7c4dff; --accent2:#00e5ff; --danger:#ff5252; --success:#30d158;
+        --glow: 0 0 0 6px rgba(124,77,255,0.12);
+      }
       * { box-sizing: border-box; }
       html, body { height: 100%; }
-      body { margin:0; background:var(--bg); color:var(--text); font-family:'Noto Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+      body {
+        margin:0; background:var(--bg); color:var(--text);
+        font-family:'Noto Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+      }
       a { color: var(--text); text-decoration: none; }
       header { padding: 16px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
       .brand { font-weight:700; letter-spacing:.3px; }
-      .status-pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--border); border-radius:999px; font-size:12px; color:var(--muted); }
-      .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); display:inline-block; }
-      .dot.running { background:var(--success); box-shadow:0 0 0 3px rgba(48,209,88,.15); }
+      .status-pill {
+        display:inline-flex; align-items:center; gap:8px; padding:6px 10px;
+        border:1px solid var(--border); border-radius:999px; font-size:12px; color:var(--muted);
+        backdrop-filter: blur(2px);
+      }
+      .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); display:inline-block; transition: all .2s ease; }
+      .dot.running { background:var(--success); box-shadow:0 0 0 4px rgba(48,209,88,.12); }
       nav { padding: 0 24px 12px; border-bottom:1px solid var(--border); }
       .tabs { display:flex; gap:12px; align-items:center; }
-      .tab { padding:8px 10px; border:1px solid var(--border); border-radius:999px; font-weight:600; color:var(--muted); }
-      .tab.active { color:var(--bg); background:var(--text); border-color:var(--text); }
+      .tab {
+        padding:8px 12px; border:1px solid var(--border); border-radius:999px; font-weight:600; color:var(--muted);
+        transition: all .2s ease;
+      }
+      .tab:hover { border-color:var(--accent); color:#d6ccff; box-shadow: 0 0 0 3px rgba(124,77,255,0.15) inset; }
+      .tab.active { color:var(--bg); background:linear-gradient(90deg, var(--text), #d8d8ff); border-color:transparent; }
       main { padding:24px; max-width:1200px; margin:0 auto; }
-      .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; }
+      .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset; }
       .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-      button, .btn { background:transparent; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:10px 12px; font-weight:600; cursor:pointer; }
-      button.primary { background:var(--text); color:var(--bg); border-color:var(--text); }
-      button.secondary { opacity:.85; }
-      button:disabled { opacity:.5; cursor:not-allowed; }
+      button, .btn {
+        background:transparent; color:var(--text); border:1px solid var(--border);
+        border-radius:10px; padding:10px 12px; font-weight:600; cursor:pointer;
+        transition: transform .05s ease, box-shadow .2s ease, background .2s ease, color .2s ease, border-color .2s ease;
+      }
+      button.primary {
+        background: linear-gradient(90deg, var(--accent), var(--accent2));
+        color:#001018; border-color:transparent; box-shadow: var(--glow);
+      }
+      button.secondary { opacity:.9; }
+      button:hover, .btn:hover { transform: translateY(-1px); }
+      button:active, .btn:active { transform: translateY(0); }
+      button:disabled { opacity:.5; cursor:not-allowed; transform:none; box-shadow:none; }
+      .btn { padding:8px 10px; }
+      input, select, textarea {
+        outline: none; transition: box-shadow .2s ease, border-color .2s ease, background .2s ease;
+      }
+      input:focus, select:focus, textarea:focus {
+        border-color: var(--accent); box-shadow: 0 0 0 4px rgba(124,77,255,0.12);
+      }
       .hint { color:var(--muted); font-size:12px; }
+      /* Upload jiggle animation */
+      @keyframes jiggle {
+        0%, 100% { transform: translateX(0); }
+        15% { transform: translateX(-4px); }
+        30% { transform: translateX(4px); }
+        45% { transform: translateX(-3px); }
+        60% { transform: translateX(3px); }
+        75% { transform: translateX(-2px); }
+        90% { transform: translateX(2px); }
+      }
+      .upload-box {
+        border:1px dashed var(--border); border-radius:12px; padding:12px; display:grid; gap:8px;
+        transition: border-color .2s ease, background .2s ease;
+      }
+      .upload-box:hover { border-color: var(--accent); background: rgba(124,77,255,0.06); }
+      .upload-box.shake { animation: jiggle .45s ease; }
     </style>
   </head>
   <body>
@@ -53,4 +101,3 @@
     </main>
   </body>
 </html>
-
