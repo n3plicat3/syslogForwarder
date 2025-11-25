@@ -37,7 +37,7 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 
 # Copy application source
-COPY webapp.py syslog_forwarder.py config.json /app/
+COPY webapp.py syslog_forwarder.py rest_service.py webhook_service.py config.json /app/
 COPY templates /app/templates
 
 # Working directory for data, uploads, config and tailed logs

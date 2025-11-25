@@ -1,5 +1,11 @@
 {% extends 'base.html' %}
 {% block content %}
+  {% if request.args.get('error') %}
+    <div class="card" style="margin-bottom:16px; border-color: var(--danger); background: rgba(220,38,38,0.08);">
+      <strong style="color:var(--danger);">Error:</strong>
+      <span>{{ request.args.get('error') }}</span>
+    </div>
+  {% endif %}
   <section class="card">
     <h3 style="margin:0 0 8px;">REST API Mock</h3>
     <div class="hint">Upload a .json file (object or array) to create a dataset. Use the paginated endpoint to fetch items.</div>
@@ -7,7 +13,8 @@
       <div>
         <div class="upload-box" id="uploadBoxRest">
           <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="controls" id="uploadFormRest">
-            <input type="file" name="file" />
+            <input type="hidden" name="context" value="rest" />
+            <input type="file" name="file" accept=".json,application/json" />
             <button type="submit" class="primary">Upload JSON</button>
           </form>
         </div>
@@ -17,8 +24,8 @@
             <ul style="list-style:none; padding:0; margin:8px 0 0;">
               {% for j in json_sets %}
                 <li style="padding:6px 0; border-bottom:1px dashed var(--border);">
-                  <code>/api/rest/{{ j }}?page=1&per_page=20</code>
-                  <div class="hint">Also available: <code>/api/json/logs/{{ j }}</code> and <code>/api/json/stream/{{ j }}</code></div>
+                  <code>{{ (rest_base ~ '/api/rest/' ~ j ~ '?page=1&per_page=20') if rest_base else ('/api/rest/' ~ j ~ '?page=1&per_page=20') }}</code>
+                  <div class="hint">Also available: <code>{{ (rest_base ~ '/api/json/logs/' ~ j) if rest_base else ('/api/json/logs/' ~ j) }}</code> and <code>{{ (rest_base ~ '/api/json/stream/' ~ j) if rest_base else ('/api/json/stream/' ~ j) }}</code></div>
                 </li>
               {% endfor %}
             </ul>
@@ -54,7 +61,9 @@
         const name = document.getElementById('ds').value;
         const page = document.getElementById('page').value || 1;
         const pp = document.getElementById('pp').value || 20;
-        const url = `/api/rest/${encodeURIComponent(name)}?page=${page}&per_page=${pp}`;
+        const base = {{ (rest_base|tojson) if rest_base is defined else '""' }};
+        const baseClean = base ? base.replace(/\/$/, '') : '';
+        const url = `${baseClean}/api/rest/${encodeURIComponent(name)}?page=${page}&per_page=${pp}`;
         const out = document.getElementById('out');
         out.textContent = `GET ${url}\n...`;
         try {

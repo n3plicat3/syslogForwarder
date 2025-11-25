@@ -9,9 +9,18 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
       :root {
-        --bg:#0a0a0a; --card:#141414; --muted:#9a9a9a; --text:#f5f5f5; --border:#232323;
+        /* Dark theme defaults */
+        --bg:#0a0a0a; --card:#141414; --muted:#8f8f8f; --text:#f5f5f5; --border:#232323;
         --accent:#7c4dff; --accent2:#00e5ff; --danger:#ff5252; --success:#30d158;
         --glow: 0 0 0 6px rgba(124,77,255,0.12);
+        --surface-2:#0e0e0e; --input-bg:#0f0f0f; --chip:#101010;
+      }
+      .light {
+        /* Light theme overrides */
+        --bg:#f7f8fb; --card:#ffffff; --muted:#556070; --text:#0f172a; --border:#e5e7eb;
+        --accent:#6d28d9; --accent2:#0891b2; --danger:#dc2626; --success:#16a34a;
+        --glow: 0 0 0 6px rgba(109,40,217,0.12);
+        --surface-2:#f1f5f9; --input-bg:#f8fafc; --chip:#f8fafc;
       }
       * { box-sizing: border-box; }
       html, body { height: 100%; }
@@ -57,11 +66,16 @@
       .btn { padding:8px 10px; }
       input, select, textarea {
         outline: none; transition: box-shadow .2s ease, border-color .2s ease, background .2s ease;
+        background: var(--input-bg) !important; color: var(--text) !important; border:1px solid var(--border) !important; border-radius:8px !important;
       }
       input:focus, select:focus, textarea:focus {
         border-color: var(--accent); box-shadow: 0 0 0 4px rgba(124,77,255,0.12);
       }
       .hint { color:var(--muted); font-size:12px; }
+      /* Themed overrides for code/mono boxes */
+      #log { background: var(--surface-2) !important; color: var(--text) !important; border-color: var(--border) !important; }
+      #out { background: var(--surface-2) !important; color: var(--text) !important; border-color: var(--border) !important; }
+      #inboundBox { background: var(--surface-2) !important; color: var(--text) !important; border-color: var(--border) !important; }
       /* Upload jiggle animation */
       @keyframes jiggle {
         0%, 100% { transform: translateX(0); }
@@ -87,6 +101,9 @@
         <span id="statusDot" class="dot {{ 'running' if running else '' }}"></span>
         <span id="statusText">{{ 'Running' if running else 'Stopped' }}</span>
       </div>
+      <div class="controls">
+        <button id="themeToggle" class="btn" title="Toggle theme">🌓 Theme</button>
+      </div>
     </header>
     <nav>
       <div class="tabs">
@@ -99,5 +116,26 @@
     <main>
       {% block content %}{% endblock %}
     </main>
+    <script>
+      (function() {
+        const key = 'theme';
+        const root = document.documentElement;
+        function apply(t){
+          if (t === 'light') root.classList.add('light'); else root.classList.remove('light');
+        }
+        // initial
+        const saved = localStorage.getItem(key);
+        if (saved) apply(saved);
+        else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) apply('light');
+        const btn = document.getElementById('themeToggle');
+        if (btn) {
+          btn.addEventListener('click', () => {
+            const nowLight = !root.classList.contains('light');
+            apply(nowLight ? 'light' : 'dark');
+            localStorage.setItem(key, nowLight ? 'light' : 'dark');
+          });
+        }
+      })();
+    </script>
   </body>
 </html>

@@ -1,5 +1,11 @@
 {% extends 'base.html' %}
 {% block content %}
+  {% if request.args.get('error') %}
+    <div class="card" style="margin-bottom:16px; border-color: var(--danger); background: rgba(220,38,38,0.08);">
+      <strong style="color:var(--danger);">Error:</strong>
+      <span>{{ request.args.get('error') }}</span>
+    </div>
+  {% endif %}
   <section style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; align-items:start;">
     <article class="card">
       <h3 style="margin:0 0 8px;">Webhook Emitter</h3>
@@ -41,7 +47,7 @@
       <h3 style="margin:0 0 8px;">Inbound Receiver</h3>
       <div class="hint">Optional endpoint you can point a webhook at while testing.</div>
       <code>/api/webhook/incoming</code>
-      <div style="max-height:360px; overflow:auto; background:#0e0e0e; color:#e6e6e6; padding:10px; border-radius:8px; margin-top:8px;">
+      <div id="inboundBox" style="max-height:360px; overflow:auto; padding:10px; border-radius:8px; margin-top:8px; border:1px dashed var(--border);">
         {% if inbound %}
           {% for e in inbound %}
             <div style="border-bottom:1px dashed var(--border); padding:6px 0;">

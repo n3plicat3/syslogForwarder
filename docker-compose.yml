@@ -1,15 +1,65 @@
 version: "3.8"
 
 services:
-  syslog-forwarder:
+  ui:
     build: .
     image: syslog-forwarder:latest
-    container_name: syslog-forwarder
+    container_name: sf-ui
+    environment:
+      - REST_BASE_URL=http://rest-lb:5041
+      - WEBHOOK_BASE_URL=http://webhook:5042
     ports:
       - "5030:5030"
     volumes:
       - ./data:/data
     restart: unless-stopped
 
-    # Example of overriding the command to run the CLI forwarder only:
-    # command: ["python", "/app/syslog_forwarder.py", "--config", "config.json"]
+  syslog:
+    image: syslog-forwarder:latest
+    container_name: sf-syslog
+    command: ["python", "/app/syslog_forwarder.py", "--config", "config.json"]
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  # Two REST backends behind an nginx load balancer
+  rest_a:
+    image: syslog-forwarder:latest
+    container_name: sf-rest-a
+    command: ["gunicorn", "--workers", "1", "--threads", "2", "--bind", "0.0.0.0:5041", "rest_service:create_app()"]
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  rest_b:
+    image: syslog-forwarder:latest
+    container_name: sf-rest-b
+    command: ["gunicorn", "--workers", "1", "--threads", "2", "--bind", "0.0.0.0:5041", "rest_service:create_app()"]
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  rest-lb:
+    image: nginx:alpine
+    container_name: sf-rest-lb
+    environment:
+      - LB_TAG=${LB_TAG:-local}
+    ports:
+      - "5041:5041"
+    volumes:
+      - ./docker/lb/rest-lb.conf.template:/etc/nginx/templates/rest-lb.conf.template:ro
+    command: >-
+      sh -c "envsubst '$$LB_TAG' < /etc/nginx/templates/rest-lb.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+    depends_on:
+      - rest_a
+      - rest_b
+
+  webhook:
+    image: syslog-forwarder:latest
+    container_name: sf-webhook
+    command: ["gunicorn", "--workers", "1", "--threads", "2", "--bind", "0.0.0.0:5042", "webhook_service:create_app()"]
+    ports:
+      - "5042:5042"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

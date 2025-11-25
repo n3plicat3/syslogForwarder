@@ -45,6 +45,10 @@ MANAGER_THREAD: threading.Thread | None = None
 TAIL_MANAGER: TailManager | None = None
 CURRENT_CONFIG: Dict = {}
 
+# Data directories
+DATA_DIR: Path | None = None
+DATASETS_DIR: Path | None = None
+
 # Event broadcasting (simple in-process pub/sub)
 SUBSCRIBERS: List[Queue] = []
 EVENT_HISTORY = deque(maxlen=500)
@@ -110,7 +114,7 @@ def start_forwarder(cfg: Dict):
         read_from_beginning = bool(files_cfg.get("read_from_beginning", False))
         rescan_interval = float(files_cfg.get("rescan_interval_sec", 5))
 
-        directory = Path.cwd()
+        directory = get_data_dir()
         manager = TailManager(
             sender=sender,
             pattern=pattern,
@@ -151,8 +155,44 @@ def load_current_config() -> Dict:
 
 
 # ----------------------------
-# JSON helpers
+# Data dir helpers + JSON helpers
 # ----------------------------
+
+def get_data_dir() -> Path:
+    """Resolve the directory where files and uploads live.
+    Preference order:
+    1) $DATA_DIR if set
+    2) /data if it exists
+    3) ./data if it exists (or can be created)
+    4) current working directory
+    """
+    global DATA_DIR, DATASETS_DIR
+    if DATA_DIR is not None:
+        return DATA_DIR
+
+    candidates = []
+    env_dir = os.environ.get("DATA_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.extend([Path("/data"), Path.cwd() / "data", Path.cwd()])
+
+    for p in candidates:
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            DATA_DIR = p
+            break
+        except Exception:
+            continue
+    if DATA_DIR is None:
+        DATA_DIR = Path.cwd()
+
+    # Ensure datasets subdir exists
+    DATASETS_DIR = DATA_DIR / "datasets"
+    try:
+        DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return DATA_DIR
 
 def _rand_like(value):
     # Generate a random value similar to the input value
@@ -201,22 +241,29 @@ def generate_samples_from_template(template: dict, count: int = 100) -> list:
 
 
 def ensure_json_loaded():
-    # Load any .json files in CWD as templates if not already loaded
-    for p in Path.cwd().glob("*.json"):
+    """Load .json files from datasets dir as templates if not loaded.
+    Avoids treating arbitrary JSON (e.g., config.json) as datasets.
+    """
+    ddir = get_data_dir()
+    ds_dir = (ddir / "datasets")
+    try:
+        ds_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    for p in ds_dir.glob("*.json"):
         name = p.stem
-        if name not in JSON_TEMPLATES:
-            try:
-                with open(p, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                # If array, take first object as template; else object
-                if isinstance(data, list) and data:
-                    data = data[0]
-                if isinstance(data, dict):
-                    JSON_TEMPLATES[name] = data
-                    # Generate a larger pool to support pagination
-                    JSON_SAMPLES[name] = generate_samples_from_template(data, 500)
-            except Exception:
-                continue
+        if name in JSON_TEMPLATES:
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, list) and data:
+                data = data[0]
+            if isinstance(data, dict):
+                JSON_TEMPLATES[name] = data
+                JSON_SAMPLES[name] = generate_samples_from_template(data, 500)
+        except Exception:
+            continue
 
 
 def start_json_forwarder(name: str, mps: float):
@@ -282,8 +329,8 @@ def stop_json_forwarder():
 
 @app.route("/")
 def index():
-    # Redirect to clearer entry point
-    return redirect(url_for("syslog_page"))
+    # Serve Syslog page directly to avoid redirect loops (200 OK)
+    return syslog_page()
 
 
 @app.route("/syslog")
@@ -291,7 +338,7 @@ def syslog_page():
     cfg = CURRENT_CONFIG or load_current_config()
     files_cfg = cfg.get("files", {})
     pattern = files_cfg.get("pattern", "*.log")
-    directory = Path.cwd()
+    directory = get_data_dir()
     patterns = [p.strip() for p in str(pattern).split(',') if p.strip()]
     if not patterns:
         patterns = ['*.log']
@@ -303,6 +350,9 @@ def syslog_page():
     dest = cfg.get("destination", {})
     ensure_json_loaded()
     json_sets = sorted(list(JSON_TEMPLATES.keys()))
+    # External service bases (optional), used if services run separately
+    rest_base = os.environ.get("REST_BASE_URL", "")
+    webhook_base = os.environ.get("WEBHOOK_BASE_URL", "")
     return render_template(
         "syslog.html",
         running=is_running(),
@@ -310,6 +360,8 @@ def syslog_page():
         files=files,
         dest=dest,
         json_sets=json_sets,
+        rest_base=rest_base,
+        webhook_base=webhook_base,
         section="syslog",
     )
 
@@ -319,11 +371,15 @@ def rest_page():
     cfg = CURRENT_CONFIG or load_current_config()
     ensure_json_loaded()
     json_sets = sorted(list(JSON_TEMPLATES.keys()))
+    rest_base = os.environ.get("REST_BASE_URL", "")
+    webhook_base = os.environ.get("WEBHOOK_BASE_URL", "")
     return render_template(
         "rest.html",
         running=is_running(),
         cfg=cfg,
         json_sets=json_sets,
+        rest_base=rest_base,
+        webhook_base=webhook_base,
         section="rest",
     )
 
@@ -334,6 +390,8 @@ def webhook_page():
     ensure_json_loaded()
     json_sets = sorted(list(JSON_TEMPLATES.keys()))
     wh_cfg = cfg.get("webhook", {})
+    rest_base = os.environ.get("REST_BASE_URL", "")
+    webhook_base = os.environ.get("WEBHOOK_BASE_URL", "")
     return render_template(
         "webhook.html",
         running=is_running(),
@@ -343,6 +401,8 @@ def webhook_page():
         sent_count=WEBHOOK_SENT_COUNT,
         error_count=WEBHOOK_ERROR_COUNT,
         inbound=list(WEBHOOK_INBOUND),
+        rest_base=rest_base,
+        webhook_base=webhook_base,
         section="webhook",
     )
 
@@ -351,29 +411,57 @@ def webhook_page():
 def start():
     cfg = CURRENT_CONFIG or load_current_config()
     start_forwarder(cfg)
-    return redirect(url_for("syslog_page"))
+    return redirect(url_for("syslog_page"), code=303)
 
 
 @app.route("/stop", methods=["POST"])
 def stop():
     stop_forwarder()
-    return redirect(url_for("syslog_page"))
+    return redirect(url_for("syslog_page"), code=303)
 
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    # Enforce upload type based on origin context
+    context = (request.form.get("context") or "").strip().lower()
+    def landing_for(ctx: str) -> str:
+        if ctx == "rest":
+            return url_for("rest_page")
+        if ctx == "webhook":
+            return url_for("webhook_page")
+        return url_for("syslog_page")
+
     f = request.files.get("file")
     if not f or f.filename == "":
-        return redirect(url_for("index"))
-    filename = secure_filename(f.filename)
-    target = Path.cwd() / filename
+        return redirect(f"{landing_for(context)}?error=No+file+selected", code=303)
+    filename = secure_filename(f.filename or "")
+    if not filename:
+        return redirect(f"{landing_for(context)}?error=Invalid+filename", code=303)
+
+    base_dir = get_data_dir()
+    is_json = filename.lower().endswith(".json")
+    is_log = filename.lower().endswith(".log")
+
+    # Validate allowed extensions by context
+    if context == "syslog" and not is_log:
+        return redirect(f"{landing_for(context)}?error=Only+.log+files+are+allowed+for+Syslog", code=303)
+    if context in ("rest", "webhook") and not is_json:
+        return redirect(f"{landing_for(context)}?error=Only+.json+files+are+allowed+for+REST/Webhook", code=303)
+    # JSON uploads go under datasets/, others at root data dir
+    target_dir = (base_dir / "datasets") if is_json else base_dir
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    target = target_dir / filename
     f.save(str(target))
     try:
         sz = target.stat().st_size
     except Exception:
         sz = None
     # If JSON file, load as template and generate default samples
-    if filename.lower().endswith(".json"):
+    if is_json:
+        parse_ok = False
         try:
             with open(target, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -383,21 +471,23 @@ def upload():
                 name = Path(filename).stem
                 JSON_TEMPLATES[name] = data
                 JSON_SAMPLES[name] = generate_samples_from_template(data, 100)
-            else:
-                # Invalid JSON structure for template; ignore
+                parse_ok = True
+        except Exception:
+            parse_ok = False
+        # If upload originated from REST/Webhook, invalid JSON should be reported
+        if context in ("rest", "webhook") and not parse_ok:
+            try:
+                target.unlink(missing_ok=True)  # remove invalid file
+            except Exception:
                 pass
-        except Exception as e:
-            # Parsing failed; ignore flash
-            pass
+            return redirect(f"{landing_for(context)}?error=Invalid+JSON+file+format", code=303)
     # Emit an event so the UI can show upload confirmation in Live Log
     try:
         broadcast_event({"type": "upload", "filename": filename, "size": sz})
     except Exception:
         pass
-    # Route user based on file type
-    if filename.lower().endswith(".json"):
-        return redirect(url_for("rest_page"))
-    return redirect(url_for("syslog_page"))
+    # Route back to originating section
+    return redirect(landing_for(context), code=303)
 
 
 @app.route("/config", methods=["GET", "POST"])
@@ -460,10 +550,10 @@ def config_view():
         # Redirect back to section if provided
         next_section = request.form.get("next") or "syslog"
         if next_section == "webhook":
-            return redirect(url_for("webhook_page"))
+            return redirect(url_for("webhook_page"), code=303)
         if next_section == "rest":
-            return redirect(url_for("rest_page"))
-        return redirect(url_for("syslog_page"))
+            return redirect(url_for("rest_page"), code=303)
+        return redirect(url_for("syslog_page"), code=303)
 
     cfg = CURRENT_CONFIG or load_current_config()
     return render_template("config.html", cfg=cfg, running=is_running(), section="config")
@@ -567,19 +657,19 @@ def json_forwarder_start():
     name = request.form.get("json_name")
     mps = float(request.form.get("mps", 1))
     if not name:
-        return redirect(url_for("syslog_page"))
+        return redirect(url_for("syslog_page"), code=303)
     try:
         start_json_forwarder(name, mps)
     except Exception as e:
         # Start failed; just fall through to index
         pass
-    return redirect(url_for("syslog_page"))
+    return redirect(url_for("syslog_page"), code=303)
 
 
 @app.route("/json_forwarder/stop", methods=["POST"])
 def json_forwarder_stop():
     stop_json_forwarder()
-    return redirect(url_for("syslog_page"))
+    return redirect(url_for("syslog_page"), code=303)
 
 
 # ----------------------------
@@ -685,18 +775,18 @@ def webhook_start():
         except Exception:
             hdrs = {}
     if not name or not url_:
-        return redirect(url_for("webhook_page"))
+        return redirect(url_for("webhook_page"), code=303)
     try:
         start_webhook_emitter(url_, name, mps=mps, method=method, headers=hdrs)
     except Exception:
         pass
-    return redirect(url_for("webhook_page"))
+    return redirect(url_for("webhook_page"), code=303)
 
 
 @app.route("/webhook/stop", methods=["POST"])
 def webhook_stop():
     stop_webhook_emitter()
-    return redirect(url_for("webhook_page"))
+    return redirect(url_for("webhook_page"), code=303)
 
 
 @app.route("/events")
@@ -735,17 +825,19 @@ def events():
 
 @app.route("/downloads/<path:filename>")
 def downloads(filename: str):
-    # Serve files from current directory for convenience
-    return send_from_directory(str(Path.cwd()), filename, as_attachment=True)
+    # Serve files from the data directory for convenience
+    return send_from_directory(str(get_data_dir()), filename, as_attachment=True)
 
 
 def create_app():
     # Lazy init for WSGI servers
     global CURRENT_CONFIG
+    get_data_dir()  # ensure dirs exist early
     CURRENT_CONFIG = load_current_config()
     return app
 
 
 if __name__ == "__main__":
+    get_data_dir()
     CURRENT_CONFIG = load_current_config()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5030)), debug=True)

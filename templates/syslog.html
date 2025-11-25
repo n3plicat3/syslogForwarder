@@ -26,15 +26,23 @@
     </article>
   </section>
 
+  {% if request.args.get('error') %}
+    <div class="card" style="margin-top:16px; border-color: var(--danger); background: rgba(220,38,38,0.08);">
+      <strong style="color:var(--danger);">Error:</strong>
+      <span>{{ request.args.get('error') }}</span>
+    </div>
+  {% endif %}
+
   <section style="display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; margin-top:16px;">
     <article class="card">
-      <h4 style="margin:0 0 8px;">Upload Log or JSON</h4>
+      <h4 style="margin:0 0 8px;">Upload .log File</h4>
       <div class="upload-box" id="uploadBoxSyslog">
         <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" id="uploadFormSyslog">
-          <input type="file" name="file" />
+          <input type="hidden" name="context" value="syslog" />
+          <input type="file" name="file" accept=".log" />
           <div class="controls">
             <button type="submit" class="primary" id="uploadBtnSyslog">Upload</button>
-            <span class="hint">.log files are tailed; .json appear under REST/Webhook.</span>
+            <span class="hint">Only .log files are allowed here.</span>
           </div>
         </form>
       </div>
