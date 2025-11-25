@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Syslog Forwarder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+      :root { --bg:#0a0a0a; --card:#141414; --muted:#9a9a9a; --text:#f5f5f5; --border:#232323; --accent:#ffffff; --danger:#ff5252; --success:#30d158; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body { margin:0; background:var(--bg); color:var(--text); font-family:'Noto Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+      a { color: var(--text); text-decoration: none; }
+      header { padding: 16px 24px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+      .brand { font-weight:700; letter-spacing:.3px; }
+      .status-pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--border); border-radius:999px; font-size:12px; color:var(--muted); }
+      .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); display:inline-block; }
+      .dot.running { background:var(--success); box-shadow:0 0 0 3px rgba(48,209,88,.15); }
+      nav { padding: 0 24px 12px; border-bottom:1px solid var(--border); }
+      .tabs { display:flex; gap:12px; align-items:center; }
+      .tab { padding:8px 10px; border:1px solid var(--border); border-radius:999px; font-weight:600; color:var(--muted); }
+      .tab.active { color:var(--bg); background:var(--text); border-color:var(--text); }
+      main { padding:24px; max-width:1200px; margin:0 auto; }
+      .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; }
+      .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+      button, .btn { background:transparent; color:var(--text); border:1px solid var(--border); border-radius:10px; padding:10px 12px; font-weight:600; cursor:pointer; }
+      button.primary { background:var(--text); color:var(--bg); border-color:var(--text); }
+      button.secondary { opacity:.85; }
+      button:disabled { opacity:.5; cursor:not-allowed; }
+      .hint { color:var(--muted); font-size:12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">Syslog Forwarder</div>
+      <div class="status-pill">
+        <span id="statusDot" class="dot {{ 'running' if running else '' }}"></span>
+        <span id="statusText">{{ 'Running' if running else 'Stopped' }}</span>
+      </div>
+    </header>
+    <nav>
+      <div class="tabs">
+        <a href="{{ url_for('syslog_page') }}" class="tab {{ 'active' if section=='syslog' else '' }}">Syslog</a>
+        <a href="{{ url_for('rest_page') }}" class="tab {{ 'active' if section=='rest' else '' }}">REST API</a>
+        <a href="{{ url_for('webhook_page') }}" class="tab {{ 'active' if section=='webhook' else '' }}">Webhook</a>
+        <a href="{{ url_for('config_view') }}" class="tab {{ 'active' if section=='config' else '' }}">Config</a>
+      </div>
+    </nav>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
+

@@ -1,5 +1,22 @@
 # syntax=docker/dockerfile:1
 
+FROM python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /build
+
+# Copy requirement files first for better layer caching
+COPY requirements.txt /build/requirements.txt
+
+# Build and install dependencies into a wheelhouse dir
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt gunicorn && \
+    python - <<'PY' && \
+import compileall; import sys; compileall.compile_dir('/install', force=True); sys.exit(0)
+PY
+
 FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -13,11 +30,8 @@ RUN groupadd -g 10001 app && useradd -m -u 10000 -g app app
 
 WORKDIR /app
 
-# Copy requirement files first for better layer caching
-COPY requirements.txt /app/requirements.txt
-
-# Install runtime deps and a WSGI server
-RUN pip install --no-cache-dir -r requirements.txt gunicorn
+# Copy prebuilt deps from builder
+COPY --from=builder /install /usr/local
 
 # Copy application source
 COPY webapp.py syslog_forwarder.py config.json /app/

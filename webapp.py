@@ -56,6 +56,13 @@ JSON_FORWARDER_THREAD: threading.Thread | None = None
 JSON_FORWARDER_STOP = threading.Event()
 JSON_FORWARDER_CFG: Dict = {}
 
+# Webhook mock (outbound emitter + inbound receiver)
+WEBHOOK_THREAD: threading.Thread | None = None
+WEBHOOK_STOP = threading.Event()
+WEBHOOK_SENT_COUNT = 0
+WEBHOOK_ERROR_COUNT = 0
+WEBHOOK_INBOUND = deque(maxlen=200)
+
 
 def broadcast_event(evt: Dict):
     EVENT_HISTORY.append(evt)
@@ -117,10 +124,10 @@ def start_forwarder(cfg: Dict):
             on_event=tail_on_event,
         )
 
-        TAIL_MANAGER = manager
-        MANAGER_THREAD = threading.Thread(target=manager.start, daemon=True)
-        MANAGER_THREAD.start()
-        broadcast_event({"type": "status", "status": "started"})
+    TAIL_MANAGER = manager
+    MANAGER_THREAD = threading.Thread(target=manager.start, daemon=True)
+    MANAGER_THREAD.start()
+    broadcast_event({"type": "status", "status": "started"})
 
 
 def stop_forwarder():
@@ -206,7 +213,8 @@ def ensure_json_loaded():
                     data = data[0]
                 if isinstance(data, dict):
                     JSON_TEMPLATES[name] = data
-                    JSON_SAMPLES[name] = generate_samples_from_template(data, 100)
+                    # Generate a larger pool to support pagination
+                    JSON_SAMPLES[name] = generate_samples_from_template(data, 500)
             except Exception:
                 continue
 
@@ -274,6 +282,12 @@ def stop_json_forwarder():
 
 @app.route("/")
 def index():
+    # Redirect to clearer entry point
+    return redirect(url_for("syslog_page"))
+
+
+@app.route("/syslog")
+def syslog_page():
     cfg = CURRENT_CONFIG or load_current_config()
     files_cfg = cfg.get("files", {})
     pattern = files_cfg.get("pattern", "*.log")
@@ -290,12 +304,46 @@ def index():
     ensure_json_loaded()
     json_sets = sorted(list(JSON_TEMPLATES.keys()))
     return render_template(
-        "index.html",
+        "syslog.html",
         running=is_running(),
         cfg=cfg,
         files=files,
         dest=dest,
         json_sets=json_sets,
+        section="syslog",
+    )
+
+
+@app.route("/rest")
+def rest_page():
+    cfg = CURRENT_CONFIG or load_current_config()
+    ensure_json_loaded()
+    json_sets = sorted(list(JSON_TEMPLATES.keys()))
+    return render_template(
+        "rest.html",
+        running=is_running(),
+        cfg=cfg,
+        json_sets=json_sets,
+        section="rest",
+    )
+
+
+@app.route("/webhook")
+def webhook_page():
+    cfg = CURRENT_CONFIG or load_current_config()
+    ensure_json_loaded()
+    json_sets = sorted(list(JSON_TEMPLATES.keys()))
+    wh_cfg = cfg.get("webhook", {})
+    return render_template(
+        "webhook.html",
+        running=is_running(),
+        cfg=cfg,
+        json_sets=json_sets,
+        webhook_cfg=wh_cfg,
+        sent_count=WEBHOOK_SENT_COUNT,
+        error_count=WEBHOOK_ERROR_COUNT,
+        inbound=list(WEBHOOK_INBOUND),
+        section="webhook",
     )
 
 
@@ -303,13 +351,13 @@ def index():
 def start():
     cfg = CURRENT_CONFIG or load_current_config()
     start_forwarder(cfg)
-    return redirect(url_for("index"))
+    return redirect(url_for("syslog_page"))
 
 
 @app.route("/stop", methods=["POST"])
 def stop():
     stop_forwarder()
-    return redirect(url_for("index"))
+    return redirect(url_for("syslog_page"))
 
 
 @app.route("/upload", methods=["POST"])
@@ -346,7 +394,10 @@ def upload():
         broadcast_event({"type": "upload", "filename": filename, "size": sz})
     except Exception:
         pass
-    return redirect(url_for("index"))
+    # Route user based on file type
+    if filename.lower().endswith(".json"):
+        return redirect(url_for("rest_page"))
+    return redirect(url_for("syslog_page"))
 
 
 @app.route("/config", methods=["GET", "POST"])
@@ -379,6 +430,19 @@ def config_view():
         tls["key_file"] = request.form.get("key_file") or None
         tls["verify_mode"] = request.form.get("verify_mode", tls.get("verify_mode", "required"))
 
+        # Webhook settings
+        webhook = cfg.setdefault("webhook", {})
+        webhook["url"] = request.form.get("webhook_url") or webhook.get("url")
+        webhook["method"] = (request.form.get("webhook_method") or webhook.get("method") or "POST").upper()
+        # Headers as JSON dict string; fallback to previous dict
+        headers_raw = request.form.get("webhook_headers")
+        if headers_raw:
+            try:
+                webhook["headers"] = json.loads(headers_raw)
+            except Exception:
+                webhook["headers"] = webhook.get("headers") or {}
+        webhook["mps"] = float(request.form.get("webhook_mps", webhook.get("mps", 1)))
+
         # Persist to config.json
         with open("config.json", "w", encoding="utf-8") as fh:
             json.dump(cfg, fh, indent=2)
@@ -393,10 +457,16 @@ def config_view():
                 global CURRENT_CONFIG
                 CURRENT_CONFIG = cfg
 
-        return redirect(url_for("index"))
+        # Redirect back to section if provided
+        next_section = request.form.get("next") or "syslog"
+        if next_section == "webhook":
+            return redirect(url_for("webhook_page"))
+        if next_section == "rest":
+            return redirect(url_for("rest_page"))
+        return redirect(url_for("syslog_page"))
 
     cfg = CURRENT_CONFIG or load_current_config()
-    return render_template("config.html", cfg=cfg)
+    return render_template("config.html", cfg=cfg, running=is_running(), section="config")
 
 
 # ----------------------------
@@ -439,6 +509,56 @@ def api_json_stream(name: str):
 
 
 # ----------------------------
+# REST mock with pagination
+# ----------------------------
+
+@app.route("/api/rest/<name>")
+def api_rest_paginated(name: str):
+    ensure_json_loaded()
+    name = secure_filename(name)
+    if name not in JSON_SAMPLES:
+        return {"error": "unknown dataset"}, 404
+    # Pagination params
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except Exception:
+        page = 1
+    try:
+        per_page = max(1, min(200, int(request.args.get("per_page", 20))))
+    except Exception:
+        per_page = 20
+
+    samples = JSON_SAMPLES[name]
+    total = len(samples)
+    start = (page - 1) * per_page
+    end = start + per_page
+    items = samples[start:end]
+    # If page is beyond range, return empty list
+    if start >= total:
+        items = []
+
+    base = url_for("api_rest_paginated", name=name, _external=False)
+    def link(p):
+        return f"{base}?page={p}&per_page={per_page}"
+
+    resp = {
+        "items": items,
+        "meta": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": (total + per_page - 1) // per_page,
+        },
+        "links": {
+            "self": link(page),
+            "next": link(page + 1) if end < total else None,
+            "prev": link(page - 1) if page > 1 else None,
+        },
+    }
+    return Response(json.dumps(resp), mimetype="application/json")
+
+
+# ----------------------------
 # JSON forwarder controls
 # ----------------------------
 
@@ -447,19 +567,136 @@ def json_forwarder_start():
     name = request.form.get("json_name")
     mps = float(request.form.get("mps", 1))
     if not name:
-        return redirect(url_for("index"))
+        return redirect(url_for("syslog_page"))
     try:
         start_json_forwarder(name, mps)
     except Exception as e:
         # Start failed; just fall through to index
         pass
-    return redirect(url_for("index"))
+    return redirect(url_for("syslog_page"))
 
 
 @app.route("/json_forwarder/stop", methods=["POST"])
 def json_forwarder_stop():
     stop_json_forwarder()
-    return redirect(url_for("index"))
+    return redirect(url_for("syslog_page"))
+
+
+# ----------------------------
+# Webhook mock: outbound emitter and inbound receiver
+# ----------------------------
+
+def _http_post(url: str, body: bytes, headers: Dict[str, str] | None = None, method: str = "POST"):
+    import urllib.request
+    import urllib.error
+
+    req = urllib.request.Request(url=url, data=body, method=method.upper())
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update({str(k): str(v) for k, v in headers.items()})
+    for k, v in hdrs.items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.getcode()
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
+
+
+def start_webhook_emitter(url: str, name: str, mps: float = 1.0, method: str = "POST", headers: Dict | None = None):
+    global WEBHOOK_THREAD, WEBHOOK_SENT_COUNT, WEBHOOK_ERROR_COUNT
+    ensure_json_loaded()
+    if name not in JSON_SAMPLES:
+        raise ValueError("Unknown json template name")
+    if WEBHOOK_THREAD is not None and WEBHOOK_THREAD.is_alive():
+        return
+
+    WEBHOOK_STOP.clear()
+    WEBHOOK_SENT_COUNT = 0
+    WEBHOOK_ERROR_COUNT = 0
+
+    def run():
+        nonlocal url, name, mps, method, headers
+        try:
+            broadcast_event({"type": "webhook", "status": "started", "name": name, "mps": mps, "url": url})
+            idx = 0
+            period = 1.0 / max(0.1, float(mps))
+            samples = JSON_SAMPLES[name]
+            while not WEBHOOK_STOP.is_set():
+                payload = samples[idx % len(samples)]
+                body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                code = _http_post(url, body, headers=headers, method=method)
+                if code and 200 <= int(code) < 400:
+                    broadcast_event({"type": "webhook_sent", "code": code, "name": name})
+                    globals()["WEBHOOK_SENT_COUNT"] += 1
+                else:
+                    broadcast_event({"type": "webhook_error", "code": code, "name": name})
+                    globals()["WEBHOOK_ERROR_COUNT"] += 1
+                idx += 1
+                time.sleep(period)
+        finally:
+            broadcast_event({"type": "webhook", "status": "stopped", "name": name})
+
+    WEBHOOK_THREAD = threading.Thread(target=run, daemon=True)
+    WEBHOOK_THREAD.start()
+
+
+def stop_webhook_emitter():
+    WEBHOOK_STOP.set()
+    if WEBHOOK_THREAD is not None:
+        WEBHOOK_THREAD.join(timeout=2.0)
+
+
+@app.route("/api/webhook/incoming", methods=["POST","PUT"])
+def webhook_incoming():
+    # Capture inbound webhook calls for testing
+    try:
+        data = request.get_json(silent=True)
+    except Exception:
+        data = None
+    entry = {
+        "headers": {k: v for k, v in request.headers.items()},
+        "json": data,
+        "args": request.args.to_dict(flat=True),
+        "path": request.path,
+        "ts": int(time.time()),
+    }
+    WEBHOOK_INBOUND.appendleft(entry)
+    broadcast_event({"type": "webhook_received", "path": request.path})
+    return {"status": "ok"}
+
+
+@app.route("/webhook/start", methods=["POST"])
+def webhook_start():
+    cfg = CURRENT_CONFIG or load_current_config()
+    name = request.form.get("json_name")
+    url_ = request.form.get("webhook_url") or cfg.get("webhook", {}).get("url")
+    mps = float(request.form.get("mps", cfg.get("webhook", {}).get("mps", 1)))
+    method = (request.form.get("method") or cfg.get("webhook", {}).get("method", "POST")).upper()
+    hdrs_raw = request.form.get("headers") or cfg.get("webhook", {}).get("headers")
+    hdrs = {}
+    if isinstance(hdrs_raw, dict):
+        hdrs = hdrs_raw
+    elif isinstance(hdrs_raw, str) and hdrs_raw.strip():
+        try:
+            hdrs = json.loads(hdrs_raw)
+        except Exception:
+            hdrs = {}
+    if not name or not url_:
+        return redirect(url_for("webhook_page"))
+    try:
+        start_webhook_emitter(url_, name, mps=mps, method=method, headers=hdrs)
+    except Exception:
+        pass
+    return redirect(url_for("webhook_page"))
+
+
+@app.route("/webhook/stop", methods=["POST"])
+def webhook_stop():
+    stop_webhook_emitter()
+    return redirect(url_for("webhook_page"))
 
 
 @app.route("/events")

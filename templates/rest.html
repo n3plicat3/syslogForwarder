@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section class="card">
+    <h3 style="margin:0 0 8px;">REST API Mock</h3>
+    <div class="hint">Upload a .json file (object or array) to create a dataset. Use the paginated endpoint to fetch items.</div>
+    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; margin-top:12px;">
+      <div>
+        <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="controls">
+          <input type="file" name="file" />
+          <button type="submit" class="primary">Upload JSON</button>
+        </form>
+        <div style="margin-top:12px;">
+          <strong>Datasets</strong>
+          {% if json_sets %}
+            <ul style="list-style:none; padding:0; margin:8px 0 0;">
+              {% for j in json_sets %}
+                <li style="padding:6px 0; border-bottom:1px dashed var(--border);">
+                  <code>/api/rest/{{ j }}?page=1&per_page=20</code>
+                  <div class="hint">Also available: <code>/api/json/logs/{{ j }}</code> and <code>/api/json/stream/{{ j }}</code></div>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="hint">No datasets yet. Upload a .json file.</div>
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="card" style="background:#101010;">
+          <h4 style="margin:0 0 8px;">Quick Tester</h4>
+          <div class="hint">Fetch a page and preview results.</div>
+          <div style="display:grid; gap:8px; margin-top:8px;">
+            <label>Dataset
+              <select id="ds" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
+                {% for j in json_sets %}<option value="{{ j }}">{{ j }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Page <input id="page" type="number" min="1" value="1" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/></label>
+            <label>Per Page <input id="pp" type="number" min="1" max="200" value="20" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/></label>
+            <div class="controls"><button id="fetchBtn" class="primary" {{ '' if json_sets else 'disabled' }}>Fetch</button></div>
+            <pre id="out" style="margin:0; max-height:280px; overflow:auto; background:#0e0e0e; color:#e6e6e6; padding:12px; border-radius:8px;">Select a dataset.</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <script>
+    const btn = document.getElementById('fetchBtn');
+    if (btn) {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('ds').value;
+        const page = document.getElementById('page').value || 1;
+        const pp = document.getElementById('pp').value || 20;
+        const url = `/api/rest/${encodeURIComponent(name)}?page=${page}&per_page=${pp}`;
+        const out = document.getElementById('out');
+        out.textContent = `GET ${url}\n...`;
+        try {
+          const res = await fetch(url);
+          const data = await res.json();
+          out.textContent = JSON.stringify(data, null, 2);
+        } catch (err) {
+          out.textContent = `Error: ${err}`;
+        }
+      });
+    }
+  </script>
+{% endblock %}
+

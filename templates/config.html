@@ -1,99 +1,89 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Edit Configuration</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap" rel="stylesheet">
-    <style>
-      :root { --bg:#0a0a0a; --card:#141414; --border:#232323; --text:#f5f5f5; --muted:#9a9a9a; }
-      * { box-sizing: border-box; }
-      body { margin:0; background:var(--bg); color:var(--text); font-family:'Noto Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-      a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
-      header { padding: 20px 24px; border-bottom:1px solid var(--border); }
-      main { padding: 24px; max-width: 900px; margin: 0 auto; }
-      .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
-      h2 { margin: 0 0 8px; font-size: 20px; }
-      h4 { margin: 0 0 8px; font-size: 16px; }
-      .grid { display:grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-      @media (max-width: 840px){ .grid { grid-template-columns: 1fr; } }
-      input, select { width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; }
-      label { display:block; font-size: 12px; color: var(--muted); }
-      .controls { display:flex; gap:8px; }
-      button, .btn { background: transparent; color: var(--text); border:1px solid var(--border); border-radius:10px; padding:10px 12px; font-weight:600; cursor:pointer; }
-      button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
-    </style>
-  </head>
-  <body>
-    <header>
-      <h2>Edit Configuration</h2>
-    </header>
-    <main>
-      <form method="post">
-        <section class="card">
-          <h4>Destination</h4>
-          <div class="grid">
-            <label>Host<input name="host" value="{{ cfg.destination.host }}" /></label>
-            <label>Port<input type="number" name="port" value="{{ cfg.destination.port }}" /></label>
-            <label>Protocol
-              <select name="protocol">
-                {% set proto = cfg.destination.protocol %}
-                <option value="udp" {{ 'selected' if proto=='udp' else '' }}>udp</option>
-                <option value="tcp" {{ 'selected' if proto=='tcp' else '' }}>tcp</option>
-                <option value="tls" {{ 'selected' if proto=='tls' else '' }}>tls</option>
-              </select>
-            </label>
-          </div>
-        </section>
+{% extends 'base.html' %}
+{% block content %}
+  <h2 style="margin:0 0 12px;">Edit Configuration</h2>
+  <form method="post">
+    <input type="hidden" name="next" value="{{ section or 'config' }}" />
+    <section class="card" style="margin-bottom:16px;">
+      <h4 style="margin:0 0 8px;">Destination</h4>
+      <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px;">
+        <label>Host<input name="host" value="{{ cfg.destination.host }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Port<input type="number" name="port" value="{{ cfg.destination.port }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Protocol
+          <select name="protocol" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;">
+            {% set proto = cfg.destination.protocol %}
+            <option value="udp" {{ 'selected' if proto=='udp' else '' }}>udp</option>
+            <option value="tcp" {{ 'selected' if proto=='tcp' else '' }}>tcp</option>
+            <option value="tls" {{ 'selected' if proto=='tls' else '' }}>tls</option>
+          </select>
+        </label>
+      </div>
+    </section>
 
-        <section class="card">
-          <h4>Files</h4>
-          <div class="grid">
-            <label>Pattern<input name="pattern" value="{{ cfg.files.pattern }}" />
-              <div style="font-size:12px; color:var(--muted); margin-top:4px;">Supports comma-separated patterns, e.g. <code>*.log,*.txt,*.jsonl</code></div>
-            </label>
-            <label>Rescan Interval (sec)<input type="number" step="0.1" name="rescan_interval_sec" value="{{ cfg.files.rescan_interval_sec }}" /></label>
-          </div>
-          <label style="margin-top:8px; display:flex; gap:8px; align-items:center;">
-            <input type="checkbox" name="from_beginning" {{ 'checked' if cfg.files.read_from_beginning else '' }} />
-            <span>Read from beginning</span>
-          </label>
-        </section>
+    <section class="card" style="margin-bottom:16px;">
+      <h4 style="margin:0 0 8px;">Files</h4>
+      <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px;">
+        <label>Pattern<input name="pattern" value="{{ cfg.files.pattern }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/>
+          <div class="hint" style="margin-top:4px;">Supports comma-separated patterns, e.g. <code>*.log,*.txt,*.jsonl</code></div>
+        </label>
+        <label>Rescan Interval (sec)<input type="number" step="0.1" name="rescan_interval_sec" value="{{ cfg.files.rescan_interval_sec }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+      </div>
+      <label style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+        <input type="checkbox" name="from_beginning" {{ 'checked' if cfg.files.read_from_beginning else '' }} />
+        <span>Read from beginning</span>
+      </label>
+    </section>
 
-        <section class="card">
-          <h4>Syslog</h4>
-          <div class="grid">
-            <label>Facility<input name="facility" value="{{ cfg.syslog.facility }}" /></label>
-            <label>Severity<input name="severity" value="{{ cfg.syslog.severity }}" /></label>
-            <label>App Name<input name="app_name" value="{{ cfg.syslog.app_name }}" /></label>
-            <label>Host Name (override)<input name="host_name" value="{{ cfg.syslog.host_name or '' }}" /></label>
-          </div>
-        </section>
+    <section class="card" style="margin-bottom:16px;">
+      <h4 style="margin:0 0 8px;">Syslog</h4>
+      <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px;">
+        <label>Facility<input name="facility" value="{{ cfg.syslog.facility }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Severity<input name="severity" value="{{ cfg.syslog.severity }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>App Name<input name="app_name" value="{{ cfg.syslog.app_name }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Host Name (override)<input name="host_name" value="{{ cfg.syslog.host_name or '' }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+      </div>
+    </section>
 
-        <section class="card">
-          <h4>TLS (if protocol=tls)</h4>
-          <div class="grid">
-            <label>CA File<input name="ca_file" value="{{ cfg.tls.ca_file or '' }}" /></label>
-            <label>Cert File<input name="cert_file" value="{{ cfg.tls.cert_file or '' }}" /></label>
-            <label>Key File<input name="key_file" value="{{ cfg.tls.key_file or '' }}" /></label>
-            <label>Verify Mode
-              <select name="verify_mode">
-                {% set vm = cfg.tls.verify_mode %}
-                <option value="required" {{ 'selected' if vm=='required' else '' }}>required</option>
-                <option value="optional" {{ 'selected' if vm=='optional' else '' }}>optional</option>
-                <option value="none" {{ 'selected' if vm=='none' else '' }}>none</option>
-              </select>
-            </label>
-          </div>
-        </section>
+    <section class="card" style="margin-bottom:16px;">
+      <h4 style="margin:0 0 8px;">TLS (if protocol=tls)</h4>
+      <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px;">
+        <label>CA File<input name="ca_file" value="{{ cfg.tls.ca_file or '' }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Cert File<input name="cert_file" value="{{ cfg.tls.cert_file or '' }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Key File<input name="key_file" value="{{ cfg.tls.key_file or '' }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Verify Mode
+          <select name="verify_mode" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;">
+            {% set vm = cfg.tls.verify_mode %}
+            <option value="required" {{ 'selected' if vm=='required' else '' }}>required</option>
+            <option value="optional" {{ 'selected' if vm=='optional' else '' }}>optional</option>
+            <option value="none" {{ 'selected' if vm=='none' else '' }}>none</option>
+          </select>
+        </label>
+      </div>
+    </section>
 
-        <div class="controls">
-          <a class="btn" href="{{ url_for('index') }}">Back</a>
-          <button type="submit" class="primary">Save</button>
-        </div>
-      </form>
-    </main>
-  </body>
-  </html>
+    <section class="card" style="margin-bottom:16px;">
+      <h4 style="margin:0 0 8px;">Webhook Defaults</h4>
+      {% set wh = cfg.webhook %}
+      <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:12px;">
+        <label>URL<input name="webhook_url" value="{{ wh.url or '' }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/></label>
+        <label>Method
+          <select name="webhook_method" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;">
+            {% set wm = (wh.method or 'POST') if wh else 'POST' %}
+            <option value="POST" {{ 'selected' if wm=='POST' else '' }}>POST</option>
+            <option value="PUT" {{ 'selected' if wm=='PUT' else '' }}>PUT</option>
+          </select>
+        </label>
+        <label>Headers (JSON)
+          <textarea name="webhook_headers" rows="4" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;">{{ (wh.headers|tojson if wh and wh.headers else '{}') }}</textarea>
+        </label>
+        <label>Messages per second
+          <input type="number" step="0.1" name="webhook_mps" value="{{ wh.mps or 1 if wh else 1 }}" style="width:100%; padding:10px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px;"/>
+        </label>
+      </div>
+    </section>
+
+    <div class="controls">
+      <a class="btn" href="{{ url_for('syslog_page') }}">Back</a>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+{% endblock %}

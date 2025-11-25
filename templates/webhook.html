@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block content %}
+  <section style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; align-items:start;">
+    <article class="card">
+      <h3 style="margin:0 0 8px;">Webhook Emitter</h3>
+      <div class="hint">Send payloads from a JSON dataset to a target URL at a fixed rate.</div>
+      <form method="post" action="{{ url_for('webhook_start') }}" style="display:grid; gap:10px; margin-top:10px;">
+        <label>Dataset
+          <select name="json_name" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
+            {% for j in json_sets %}<option value="{{ j }}">{{ j }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Target URL
+          <input name="webhook_url" value="{{ webhook_cfg.get('url','') }}" placeholder="https://example/webhook" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+        </label>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+          <label>Method
+            <select name="method" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
+              {% set m = (webhook_cfg.get('method') or 'POST').upper() %}
+              <option value="POST" {{ 'selected' if m=='POST' else '' }}>POST</option>
+              <option value="PUT" {{ 'selected' if m=='PUT' else '' }}>PUT</option>
+            </select>
+          </label>
+          <label>Messages per second
+            <input type="number" step="0.1" name="mps" value="{{ webhook_cfg.get('mps',1) }}" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+          </label>
+        </div>
+        <label>Headers (JSON object)
+          <textarea name="headers" rows="4" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">{{ (webhook_cfg.get('headers')|tojson if webhook_cfg.get('headers') else '{}') }}</textarea>
+        </label>
+        <div class="controls">
+          <button type="submit" class="primary" {{ '' if json_sets else 'disabled' }}>Start</button>
+          <button class="secondary" formmethod="post" formaction="{{ url_for('webhook_stop') }}">Stop</button>
+          <a class="btn" href="{{ url_for('config_view') }}">Save Defaults</a>
+        </div>
+        <div class="hint">Sent: {{ sent_count }} · Errors: {{ error_count }}</div>
+      </form>
+    </article>
+
+    <article class="card">
+      <h3 style="margin:0 0 8px;">Inbound Receiver</h3>
+      <div class="hint">Optional endpoint you can point a webhook at while testing.</div>
+      <code>/api/webhook/incoming</code>
+      <div style="max-height:360px; overflow:auto; background:#0e0e0e; color:#e6e6e6; padding:10px; border-radius:8px; margin-top:8px;">
+        {% if inbound %}
+          {% for e in inbound %}
+            <div style="border-bottom:1px dashed var(--border); padding:6px 0;">
+              <div class="hint">ts={{ e['ts'] }}</div>
+              <pre style="margin:0; white-space:pre-wrap;">{{ e['json'] | tojson(indent=2) }}</pre>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="hint">No inbound events yet.</div>
+        {% endif %}
+      </div>
+    </article>
+  </section>
+{% endblock %}
