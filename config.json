@@ -21,5 +21,11 @@
     "app_name": "forwarder",
     "host_name": null,
     "severity": "info"
+  },
+  "webhook": {
+    "url": null,
+    "method": "POST",
+    "headers": {},
+    "mps": 1.0
   }
 }
