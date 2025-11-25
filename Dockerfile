@@ -43,7 +43,7 @@ CMD [ \
   "--threads", "4", \
   "--bind", "0.0.0.0:5030", \
   "--timeout", "0", \
-  "webapp:create_app" \
+  "webapp:create_app()" \
 ]
 
 #
