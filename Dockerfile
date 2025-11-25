@@ -13,8 +13,11 @@ COPY requirements.txt /build/requirements.txt
 
 # Build and install dependencies into a wheelhouse dir
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt gunicorn && \
-    python - <<'PY' && \
-import compileall; import sys; compileall.compile_dir('/install', force=True); sys.exit(0)
+    python - <<'PY'
+import compileall
+import sys
+compileall.compile_dir('/install', force=True)
+sys.exit(0)
 PY
 
 FROM python:3.11-slim AS runtime

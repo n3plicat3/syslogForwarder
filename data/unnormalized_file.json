@@ -1,0 +1,6 @@
+[
+    {
+        "msg": "<30>1 2025-10-07T15:10:02.016236+06:00 bisp-vcsa1 sa1 20543 - -  mkdir: cannot create directory \u201a\u00c4\u00f2/var/log/sa\u201a\u00c4\u00f4: File exists",
+        "normalized": {}
+    }
+]
