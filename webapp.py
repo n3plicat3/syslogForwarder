@@ -61,12 +61,9 @@ DATASETS_DIR: Path | None = None
 SUBSCRIBERS: List[Queue] = []
 EVENT_HISTORY = deque(maxlen=500)
 
-# JSON simulation/forwarder state
+# JSON dataset state (for REST/Webhook simulators)
 JSON_TEMPLATES: Dict[str, dict] = {}
 JSON_SAMPLES: Dict[str, list] = {}
-JSON_FORWARDER_THREAD: threading.Thread | None = None
-JSON_FORWARDER_STOP = threading.Event()
-JSON_FORWARDER_CFG: Dict = {}
 
 # Webhook mock (outbound emitter + inbound receiver)
 WEBHOOK_THREAD: threading.Thread | None = None
@@ -274,65 +271,7 @@ def ensure_json_loaded():
             continue
 
 
-def start_json_forwarder(name: str, mps: float):
-    global JSON_FORWARDER_THREAD
-    ensure_json_loaded()
-    if name not in JSON_SAMPLES:
-        raise ValueError("Unknown json template name")
-    if JSON_FORWARDER_THREAD is not None and JSON_FORWARDER_THREAD.is_alive():
-        return
-
-    JSON_FORWARDER_STOP.clear()
-
-    cfg = CURRENT_CONFIG or load_current_config()
-    JSON_FORWARDER_CFG.update({
-        "name": name,
-        "mps": mps,
-    })
-
-    def run():
-        try:
-            sender = build_sender(cfg)
-            syslog_cfg = cfg.get("syslog", {})
-            facility = FACILITY_MAP.get((syslog_cfg.get("facility") or "user"), 1)
-            severity = SEVERITY_MAP.get((syslog_cfg.get("severity") or "info"), 6)
-            app_name = (syslog_cfg.get("app_name") or "json-forwarder")
-            host_name = syslog_cfg.get("host_name") or None
-            procid = str(os.getpid())
-            idx = 0
-            period = 1.0 / max(0.1, float(mps))
-            broadcast_event({"type": "json_forwarder", "status": "started", "name": name, "mps": mps})
-            samples = JSON_SAMPLES[name]
-            while not JSON_FORWARDER_STOP.is_set():
-                payload = samples[idx % len(samples)]
-                msg = json.dumps(payload, separators=(",", ":"))
-                pri = facility * 8 + severity
-                timestamp = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).astimezone().isoformat()
-                hostname = host_name or os.uname().nodename
-                version = 1
-                syslog_msg = f"<{pri}>{version} {timestamp} {hostname} {app_name} {procid} - - {msg}"
-                try:
-                    sender.send(syslog_msg)
-                    broadcast_event({"type": "json_line", "timestamp": timestamp, "app": app_name, "message": msg})
-                except Exception:
-                    pass
-                idx += 1
-                time.sleep(period)
-        finally:
-            try:
-                sender.close()
-            except Exception:
-                pass
-            broadcast_event({"type": "json_forwarder", "status": "stopped", "name": name})
-
-    JSON_FORWARDER_THREAD = threading.Thread(target=run, daemon=True)
-    JSON_FORWARDER_THREAD.start()
-
-
-def stop_json_forwarder():
-    JSON_FORWARDER_STOP.set()
-    if JSON_FORWARDER_THREAD is not None:
-        JSON_FORWARDER_THREAD.join(timeout=2.0)
+# Removed JSON → Syslog forwarder implementation per request
 
 
 @app.route("/")
@@ -356,8 +295,6 @@ def syslog_page():
             seen.add(str(p.name))
     files = sorted(list(seen))
     dest = cfg.get("destination", {})
-    ensure_json_loaded()
-    json_sets = sorted(list(JSON_TEMPLATES.keys()))
     # External service bases (optional), used if services run separately
     rest_base = os.environ.get("REST_BASE_URL", "")
     webhook_base = os.environ.get("WEBHOOK_BASE_URL", "")
@@ -367,7 +304,6 @@ def syslog_page():
         cfg=cfg,
         files=files,
         dest=dest,
-        json_sets=json_sets,
         rest_base=rest_base,
         webhook_base=webhook_base,
         section="syslog",
@@ -649,28 +585,7 @@ def api_rest_paginated(name: str):
     return Response(json.dumps(resp), mimetype="application/json")
 
 
-# ----------------------------
-# JSON forwarder controls
-# ----------------------------
-
-@app.route("/json_forwarder/start", methods=["POST"])
-def json_forwarder_start():
-    name = request.form.get("json_name")
-    mps = float(request.form.get("mps", 1))
-    if not name:
-        return redirect(url_for("syslog_page"), code=303)
-    try:
-        start_json_forwarder(name, mps)
-    except Exception as e:
-        # Start failed; just fall through to index
-        pass
-    return redirect(url_for("syslog_page"), code=303)
-
-
-@app.route("/json_forwarder/stop", methods=["POST"])
-def json_forwarder_stop():
-    stop_json_forwarder()
-    return redirect(url_for("syslog_page"), code=303)
+# JSON → Syslog forwarder routes removed
 
 
 # ----------------------------

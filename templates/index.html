@@ -146,7 +146,7 @@
 
         <article class="card">
           <h4>JSON Simulator</h4>
-          <div class="hint">Upload a .json template to generate samples or forward as syslog.</div>
+          <div class="hint">Upload a .json template to generate samples.</div>
           <div style="margin-top:10px; display:grid; gap:10px;">
             <div>
               <div class="sub" style="margin-bottom:6px;">Datasets</div>
@@ -163,27 +163,7 @@
                 <div class="hint">No JSON datasets yet. Upload a .json file.</div>
               {% endif %}
             </div>
-            <div>
-              <div class="sub" style="margin-bottom:6px;">Forward as Syslog</div>
-              <form method="post" action="{{ url_for('json_forwarder_start') }}" style="display:grid; gap:8px;">
-                <label>Dataset
-                  <select name="json_name" style="width:100%; background: #0f0f0f; color: var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
-                    {% for j in json_sets %}
-                      <option value="{{ j }}">{{ j }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label>Messages per second
-                  <input type="number" step="0.1" name="mps" value="1" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
-                </label>
-                <div class="controls">
-                  <button type="submit" class="primary" {{ '' if json_sets else 'disabled' }}>Start</button>
-                </div>
-              </form>
-              <form method="post" action="{{ url_for('json_forwarder_stop') }}" class="controls">
-                <button type="submit" class="secondary">Stop</button>
-              </form>
-            </div>
+            
           </div>
         </article>
       </section>
@@ -212,9 +192,7 @@
             const sevMap = {0:'emerg',1:'alert',2:'crit',3:'err',4:'warn',5:'notice',6:'info',7:'debug'};
             const line = `[${e.timestamp}] ${e.file} ${sevMap[e.severity]||e.severity} ${e.app}: ${e.message}`;
             append(line);
-          } else if (e.type === 'json_line') {
-            const line = `[${e.timestamp}] json-forwarder: ${e.message}`;
-            append(line);
+          
           } else if (e.type === 'start') {
             append(`[${e.timestamp}] started tailing ${e.file}`);
           } else if (e.type === 'stop') {
@@ -228,8 +206,7 @@
               if (e.status === 'stopped') dot.classList.remove('running');
             }
             if (text) text.textContent = (e.status === 'started') ? 'Running' : 'Stopped';
-          } else if (e.type === 'json_forwarder') {
-            append(`json forwarder: ${e.status} ${e.name || ''} ${e.mps || ''}`.trim());
+          
           } else if (e.type === 'upload') {
             const size = (e.size || 0);
             append(`upload: ${e.filename} (${size} bytes)`);
