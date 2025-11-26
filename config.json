@@ -2,7 +2,7 @@
   "destination": {
     "host": "127.0.0.1",
     "port": 514,
-    "protocol": "udp"
+    "protocol": "tcp"
   },
   "tls": {
     "enabled": false,
@@ -13,17 +13,17 @@
   },
   "files": {
     "pattern": "*.log",
-    "read_from_beginning": false,
+    "read_from_beginning": true,
     "rescan_interval_sec": 5.0
   },
   "syslog": {
-    "facility": "user",
-    "app_name": "forwarder",
-    "host_name": null,
+    "facility": "mocker",
+    "app_name": "LP-Mocker",
+    "host_name": "Demo",
     "severity": "info"
   },
   "webhook": {
-    "url": null,
+    "url": "localhost/api/webhook/incoming",
     "method": "POST",
     "headers": {},
     "mps": 1.0

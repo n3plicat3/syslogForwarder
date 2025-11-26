@@ -19,17 +19,25 @@ from flask import (
     url_for,
 )
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from syslog_forwarder import (
     FACILITY_MAP,
     SEVERITY_MAP,
     TailManager,
     build_sender,
+    rfc5424_message,
     load_config,
 )
 
 
 app = Flask(__name__)
+"""When running behind a reverse proxy (ingress, load balancer, etc.),
+apply ProxyFix so Flask respects X-Forwarded-* headers. This ensures
+generated URLs and redirects include the correct scheme, host, and
+path prefix (X-Forwarded-Prefix) and prevents redirect issues.
+"""
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 """
 Flask secret key and any passwords are intentionally not used.
 The UI avoids session/flash features so no secret is required.
@@ -486,77 +494,70 @@ def upload():
         broadcast_event({"type": "upload", "filename": filename, "size": sz})
     except Exception:
         pass
-    # Route back to originating section
-    return redirect(landing_for(context), code=303)
+    # If a .log file was uploaded for Syslog, forward each line as syslog asynchronously
+    if context == "syslog" and is_log:
+        try:
+            cfg = CURRENT_CONFIG or load_current_config()
+            syslog_cfg = cfg.get("syslog", {})
+            facility = FACILITY_MAP.get((syslog_cfg.get("facility") or "user").lower(), 1)
+            severity = SEVERITY_MAP.get((syslog_cfg.get("severity") or "info").lower(), 6)
+            app_name = syslog_cfg.get("app_name") or "forwarder"
+            host_name = syslog_cfg.get("host_name") or None
+            procid = str(os.getpid())
+
+            def _forward_file(pth: Path):
+                sender = None
+                try:
+                    sender = build_sender(cfg)
+                    with open(pth, "r", encoding="utf-8", errors="replace") as fh:
+                        for line in fh:
+                            msg = line.rstrip("\r\n")
+                            if msg == "":
+                                continue
+                            syslog_msg = rfc5424_message(
+                                msg=msg,
+                                facility=facility,
+                                severity=severity,
+                                host_name=host_name,
+                                app_name=app_name,
+                                procid=procid,
+                            )
+                            try:
+                                sender.send(syslog_msg)
+                                broadcast_event({
+                                    "type": "line",
+                                    "file": str(pth),
+                                    "filename": str(pth.name),
+                                    "app": app_name,
+                                    "facility": facility,
+                                    "severity": severity,
+                                    "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).astimezone().isoformat(),
+                                    "message": msg,
+                                })
+                            except Exception:
+                                # Drop line if sending fails
+                                pass
+                finally:
+                    try:
+                        if sender is not None:
+                            sender.close()
+                    except Exception:
+                        pass
+
+            threading.Thread(target=_forward_file, args=(target,), daemon=True).start()
+        except Exception:
+            # Ignore forwarding errors; upload is still successful
+            pass
+    # Route back to originating section with success indicator
+    return redirect(f"{landing_for(context)}?uploaded={filename}", code=303)
 
 
 @app.route("/config", methods=["GET", "POST"])
 def config_view():
+    # Disable config editing in the UI
     if request.method == "POST":
-        # Build config from form values
-        cfg = load_current_config()
-        dest = cfg.setdefault("destination", {})
-        files = cfg.setdefault("files", {})
-        syslog = cfg.setdefault("syslog", {})
-        tls = cfg.setdefault("tls", {})
-
-        dest["host"] = request.form.get("host", dest.get("host", "127.0.0.1"))
-        dest["port"] = int(request.form.get("port", dest.get("port", 514)))
-        dest["protocol"] = request.form.get("protocol", dest.get("protocol", "udp"))
-
-        files["pattern"] = request.form.get("pattern", files.get("pattern", "*.log"))
-        files["read_from_beginning"] = bool(request.form.get("from_beginning"))
-        files["rescan_interval_sec"] = float(
-            request.form.get("rescan_interval_sec", files.get("rescan_interval_sec", 5))
-        )
-
-        syslog["facility"] = request.form.get("facility", syslog.get("facility", "user"))
-        syslog["severity"] = request.form.get("severity", syslog.get("severity", "info"))
-        syslog["app_name"] = request.form.get("app_name", syslog.get("app_name", "forwarder"))
-        syslog["host_name"] = request.form.get("host_name") or None
-
-        tls["ca_file"] = request.form.get("ca_file") or None
-        tls["cert_file"] = request.form.get("cert_file") or None
-        tls["key_file"] = request.form.get("key_file") or None
-        tls["verify_mode"] = request.form.get("verify_mode", tls.get("verify_mode", "required"))
-
-        # Webhook settings
-        webhook = cfg.setdefault("webhook", {})
-        webhook["url"] = request.form.get("webhook_url") or webhook.get("url")
-        webhook["method"] = (request.form.get("webhook_method") or webhook.get("method") or "POST").upper()
-        # Headers as JSON dict string; fallback to previous dict
-        headers_raw = request.form.get("webhook_headers")
-        if headers_raw:
-            try:
-                webhook["headers"] = json.loads(headers_raw)
-            except Exception:
-                webhook["headers"] = webhook.get("headers") or {}
-        webhook["mps"] = float(request.form.get("webhook_mps", webhook.get("mps", 1)))
-
-        # Persist to config.json
-        with open("config.json", "w", encoding="utf-8") as fh:
-            json.dump(cfg, fh, indent=2)
-
-        # If running, restart with new config
-        if is_running():
-            stop_forwarder()
-            start_forwarder(cfg)
-        else:
-            # Keep the in-memory one fresh
-            with STATE_LOCK:
-                global CURRENT_CONFIG
-                CURRENT_CONFIG = cfg
-
-        # Redirect back to section if provided
-        next_section = request.form.get("next") or "syslog"
-        if next_section == "webhook":
-            return redirect(url_for("webhook_page"), code=303)
-        if next_section == "rest":
-            return redirect(url_for("rest_page"), code=303)
-        return redirect(url_for("syslog_page"), code=303)
-
-    cfg = CURRENT_CONFIG or load_current_config()
-    return render_template("config.html", cfg=cfg, running=is_running(), section="config")
+        return ("Config editing is disabled in this UI.", 403)
+    return ("Not found", 404)
 
 
 # ----------------------------

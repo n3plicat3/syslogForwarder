@@ -37,7 +37,6 @@
         <div class="controls">
           <button type="submit" class="primary" {{ '' if json_sets else 'disabled' }}>Start</button>
           <button class="secondary" formmethod="post" formaction="{{ url_for('webhook_stop') }}">Stop</button>
-          <a class="btn" href="{{ url_for('config_view') }}">Save Defaults</a>
         </div>
         <div class="hint">Sent: {{ sent_count }} · Errors: {{ error_count }}</div>
       </form>

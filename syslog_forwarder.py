@@ -120,7 +120,9 @@ class TcpSender(SyslogSender):
         self.ssl_context = ssl_context
         self.sock = None  # type: Optional[socket.socket]
         self.lock = threading.Lock()
-        self._connect()
+        # Defer connecting until first send to avoid raising during
+        # construction when the destination is unavailable.
+        # Connection attempts are handled (with retry) inside send().
 
     def _connect(self) -> None:
         s = socket.create_connection((self.host, self.port), timeout=10)

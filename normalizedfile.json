@@ -1,0 +1,48 @@
+{
+      "page": {
+              "size": 2,
+                  "totalElements": 5,
+                      "totalPages": 3,
+                          "number": 1
+                            },
+                              "logs": [
+                                      {
+                                                "timestamp": "2025-11-26T10:15:00Z",
+                                                      "level": "INFO",
+                                                            "http_method": "GET",
+                                                                  "endpoint": "/api/v1/users/123",
+                                                                        "response_status": 200,
+                                                                              "response_time_ms": 123,
+                                                                                    "client_ip": "192.168.1.50",
+                                                                                          "response_size_bytes": 512,
+                                                                                                "response_body": {
+                                                                                                            "user_id": "123",
+                                                                                                                    "username": "johndoe",
+                                                                                                                            "email": "johndoe@example.com",
+                                                                                                                                    "roles": ["user", "admin"],
+                                                                                                                                            "created_at": "2023-01-10T14:22:00Z"
+                                                                                                                                                  },
+                                                                                                                                                        "correlation_id": "req-789xyz"
+                                                                                                                                                            },
+                                                                                                                                                                {
+                                                                                                                                                                          "timestamp": "2025-11-26T10:16:00Z",
+                                                                                                                                                                                "level": "ERROR",
+                                                                                                                                                                                      "http_method": "POST",
+                                                                                                                                                                                            "endpoint": "/api/v1/users",
+                                                                                                                                                                                                  "response_status": 400,
+                                                                                                                                                                                                        "response_time_ms": 78,
+                                                                                                                                                                                                              "client_ip": "192.168.1.51",
+                                                                                                                                                                                                                    "response_size_bytes": 240,
+                                                                                                                                                                                                                          "response_body": {
+                                                                                                                                                                                                                                      "error": "Invalid email format"
+                                                                                                                                                                                                                                            },
+                                                                                                                                                                                                                                                  "correlation_id": "req-790xyz"
+                                                                                                                                                                                                                                                      }
+                                                                                                                                                                                                                                                        ],
+                                                                                                                                                                                                                                                          "links": {
+                                                                                                                                                                                                                                                                  "self": "/api/logs?page=1&size=2",
+                                                                                                                                                                                                                                                                      "next": "/api/logs?page=2&size=2",
+                                                                                                                                                                                                                                                                          "last": "/api/logs?page=3&size=2"
+                                                                                                                                                                                                                                                                            }
+}
+

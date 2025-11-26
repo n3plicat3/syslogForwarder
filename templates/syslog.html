@@ -16,7 +16,6 @@
         <form method="post" action="{{ url_for('stop') }}">
           <button type="submit" class="secondary" {{ '' if running else 'disabled' }}>Stop</button>
         </form>
-        <a class="btn" href="{{ url_for('config_view') }}">Edit Config</a>
       </div>
       <div style="display:grid; grid-template-columns:auto 1fr; gap:2px 12px; font-size:13px;">
         <div class="hint">Host</div><div>{{ dest.get('host','') }}</div>
@@ -30,6 +29,13 @@
     <div class="card" style="margin-top:16px; border-color: var(--danger); background: rgba(220,38,38,0.08);">
       <strong style="color:var(--danger);">Error:</strong>
       <span>{{ request.args.get('error') }}</span>
+    </div>
+  {% endif %}
+  {% if request.args.get('uploaded') %}
+    <div class="card" style="margin-top:16px; border-color: var(--success); background: rgba(48,209,88,0.08);">
+      <strong style="color:var(--success);">Uploaded:</strong>
+      <span>{{ request.args.get('uploaded') }}</span>
+      <span class="hint">Forwarding lines as syslog messages…</span>
     </div>
   {% endif %}
 
