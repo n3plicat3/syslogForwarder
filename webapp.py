@@ -655,6 +655,41 @@ def stop_webhook_emitter():
         WEBHOOK_THREAD.join(timeout=2.0)
 
 
+def start_webhook_emitter_samples(url: str, samples: list, mps: float = 1.0, method: str = "POST", headers: Dict | None = None, tag: str = "adhoc"):
+    """Start a webhook emitter using an explicit samples list instead of a named dataset."""
+    global WEBHOOK_THREAD, WEBHOOK_SENT_COUNT, WEBHOOK_ERROR_COUNT
+    if WEBHOOK_THREAD is not None and WEBHOOK_THREAD.is_alive():
+        return
+
+    WEBHOOK_STOP.clear()
+    WEBHOOK_SENT_COUNT = 0
+    WEBHOOK_ERROR_COUNT = 0
+
+    def run():
+        nonlocal url, samples, mps, method, headers, tag
+        try:
+            broadcast_event({"type": "webhook", "status": "started", "name": tag, "mps": mps, "url": url})
+            idx = 0
+            period = 1.0 / max(0.1, float(mps))
+            while not WEBHOOK_STOP.is_set():
+                payload = samples[idx % len(samples)]
+                body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                code = _http_post(url, body, headers=headers, method=method)
+                if code and 200 <= int(code) < 400:
+                    broadcast_event({"type": "webhook_sent", "code": code, "name": tag})
+                    globals()["WEBHOOK_SENT_COUNT"] += 1
+                else:
+                    broadcast_event({"type": "webhook_error", "code": code, "name": tag})
+                    globals()["WEBHOOK_ERROR_COUNT"] += 1
+                idx += 1
+                time.sleep(period)
+        finally:
+            broadcast_event({"type": "webhook", "status": "stopped", "name": tag})
+
+    WEBHOOK_THREAD = threading.Thread(target=run, daemon=True)
+    WEBHOOK_THREAD.start()
+
+
 @app.route("/api/webhook/incoming", methods=["POST","PUT"])
 def webhook_incoming():
     # Capture inbound webhook calls for testing
@@ -674,6 +709,26 @@ def webhook_incoming():
     return {"status": "ok"}
 
 
+# Alias path to match Logpoint receiver flow
+@app.route("/lphc/events/json", methods=["POST"])  # matches: POST /lphc/events/json
+def webhook_incoming_logpoint():
+    try:
+        data = request.get_json(silent=True)
+    except Exception:
+        data = None
+    entry = {
+        "headers": {k: v for k, v in request.headers.items()},
+        "json": data,
+        "args": request.args.to_dict(flat=True),
+        "path": request.path,
+        "ts": int(time.time()),
+    }
+    WEBHOOK_INBOUND.appendleft(entry)
+    broadcast_event({"type": "webhook_received", "path": request.path})
+    # Respond with 200 OK and JSON
+    return Response(json.dumps({"status": "ok"}), mimetype="application/json")
+
+
 @app.route("/webhook/start", methods=["POST"])
 def webhook_start():
     cfg = CURRENT_CONFIG or load_current_config()
@@ -690,12 +745,54 @@ def webhook_start():
             hdrs = json.loads(hdrs_raw)
         except Exception:
             hdrs = {}
+    # Logpoint quick preset support
+    lp_host = (request.form.get("lp_host") or "").strip()
+    lp_scheme = (request.form.get("lp_scheme") or "http").strip()
+    lp_api_key = (request.form.get("lp_api_key") or "").strip()
+    if lp_host:
+        # Build URL in the expected format: {scheme}://{host}/lphc/events/json
+        if lp_host.startswith("http://") or lp_host.startswith("https://"):
+            base = lp_host
+        else:
+            base = f"{lp_scheme}://{lp_host}"
+        if not base.endswith("/"):
+            base = base + "/"
+        url_ = base + "lphc/events/json"
+        # Apply x-api-key header if provided
+        if lp_api_key and "x-api-key" not in {k.lower(): v for k, v in hdrs.items()}:
+            hdrs["x-api-key"] = lp_api_key
+
+    # Raw JSON template (adhoc) support
+    raw_json = request.form.get("raw_json")
+    adhoc_samples = None
+    if raw_json and raw_json.strip():
+        try:
+            raw = json.loads(raw_json)
+            if isinstance(raw, list) and raw:
+                seed = raw[0]
+            else:
+                seed = raw
+            if isinstance(seed, dict):
+                adhoc_samples = generate_samples_from_template(seed, 500)
+        except Exception:
+            adhoc_samples = None
     if not name or not url_:
-        return redirect(url_for("webhook_page"), code=303)
-    try:
-        start_webhook_emitter(url_, name, mps=mps, method=method, headers=hdrs)
-    except Exception:
-        pass
+        # If adhoc samples exist, allow start without named dataset
+        if adhoc_samples and url_:
+            try:
+                start_webhook_emitter_samples(url_, adhoc_samples, mps=mps, method=method, headers=hdrs, tag="adhoc")
+            except Exception:
+                pass
+        else:
+            return redirect(url_for("webhook_page"), code=303)
+    else:
+        try:
+            if adhoc_samples:
+                start_webhook_emitter_samples(url_, adhoc_samples, mps=mps, method=method, headers=hdrs, tag=f"adhoc:{name}")
+            else:
+                start_webhook_emitter(url_, name, mps=mps, method=method, headers=hdrs)
+        except Exception:
+            pass
     return redirect(url_for("webhook_page"), code=303)
 
 

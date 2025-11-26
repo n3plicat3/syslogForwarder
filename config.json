@@ -23,9 +23,9 @@
     "severity": "info"
   },
   "webhook": {
-    "url": "localhost/api/webhook/incoming",
+    "url": "http://logpoint-host/lphc/events/json",
     "method": "POST",
-    "headers": {},
+    "headers": { "x-api-key": "<api key>" },
     "mps": 1.0
   }
 }

@@ -33,10 +33,27 @@ def status():
     return {"inbound_count": len(INBOUND)}
 
 
+# Alias path to match Logpoint receiver flow
+@app.route("/lphc/events/json", methods=["POST"])  # matches: POST /lphc/events/json
+def webhook_incoming_logpoint():
+    try:
+        data = request.get_json(silent=True)
+    except Exception:
+        data = None
+    entry = {
+        "headers": {k: v for k, v in request.headers.items()},
+        "json": data,
+        "args": request.args.to_dict(flat=True),
+        "path": request.path,
+        "ts": int(time.time()),
+    }
+    INBOUND.appendleft(entry)
+    return {"status": "ok"}
+
+
 def create_app():
     return app
 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5042)))
-

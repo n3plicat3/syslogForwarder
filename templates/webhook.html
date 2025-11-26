@@ -9,16 +9,38 @@
   <section style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; align-items:start;">
     <article class="card">
       <h3 style="margin:0 0 8px;">Webhook Emitter</h3>
-      <div class="hint">Send payloads from a JSON dataset to a target URL at a fixed rate.</div>
+      <div class="hint">Send payloads to your receiver at a fixed rate. Use a dataset or paste a raw JSON template for dynamic generation.</div>
       <form method="post" action="{{ url_for('webhook_start') }}" style="display:grid; gap:10px; margin-top:10px;">
         <label>Dataset
           <select name="json_name" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
             {% for j in json_sets %}<option value="{{ j }}">{{ j }}</option>{% endfor %}
           </select>
         </label>
+        <label>Raw JSON template (optional)
+          <textarea name="raw_json" rows="4" placeholder='{"hello":"world"}' style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"></textarea>
+          <div class="hint">If provided, this template is used to generate dynamic samples (ignores dataset selection).</div>
+        </label>
         <label>Target URL
           <input name="webhook_url" value="{{ webhook_cfg.get('url','') }}" placeholder="https://example/webhook" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
         </label>
+        <div class="card" style="padding:8px;">
+          <div style="font-weight:600; margin-bottom:6px;">Quick preset: Logpoint</div>
+          <div class="hint">Builds <code>{scheme}://{host}/lphc/events/json</code> and sets <code>x-api-key</code>.</div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px;">
+            <label>Scheme
+              <select name="lp_scheme" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
+                <option value="http">http</option>
+                <option value="https">https</option>
+              </select>
+            </label>
+            <label>Host
+              <input name="lp_host" placeholder="logpoint-host" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+            </label>
+            <label>X-API-Key
+              <input name="lp_api_key" placeholder="&lt;api key&gt;" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+            </label>
+          </div>
+        </div>
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
           <label>Method
             <select name="method" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
@@ -35,7 +57,7 @@
           <textarea name="headers" rows="4" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">{{ (webhook_cfg.get('headers')|tojson if webhook_cfg.get('headers') else '{}') }}</textarea>
         </label>
         <div class="controls">
-          <button type="submit" class="primary" {{ '' if json_sets else 'disabled' }}>Start</button>
+          <button type="submit" class="primary">Start</button>
           <button class="secondary" formmethod="post" formaction="{{ url_for('webhook_stop') }}">Stop</button>
         </div>
         <div class="hint">Sent: {{ sent_count }} · Errors: {{ error_count }}</div>
@@ -44,8 +66,10 @@
 
     <article class="card">
       <h3 style="margin:0 0 8px;">Inbound Receiver</h3>
-      <div class="hint">Optional endpoint you can point a webhook at while testing.</div>
+      <div class="hint">Optional endpoints you can point a webhook at while testing.</div>
       <code>/api/webhook/incoming</code>
+      <div class="hint" style="margin-top:6px;">Logpoint-compatible alias:</div>
+      <code>/lphc/events/json</code>
       <div id="inboundBox" style="max-height:360px; overflow:auto; padding:10px; border-radius:8px; margin-top:8px; border:1px dashed var(--border);">
         {% if inbound %}
           {% for e in inbound %}

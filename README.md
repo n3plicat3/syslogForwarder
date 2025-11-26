@@ -60,6 +60,7 @@ Use The UI
   - Configure URL, method, headers, and messages/second.
   - Pick a dataset and Start to emit real HTTP requests.
   - Optional local receiver: `POST /api/webhook/incoming`
+  - Logpoint preset supported: builds `POST /lphc/events/json` with `x-api-key`.
 
 CLI (no UI)
 -----------
@@ -137,6 +138,45 @@ Tips
 - Multiple patterns work: `"*.log,*.jsonl"`.
 - Uploading a `.json` file creates a dataset you can page through at `/api/rest/<dataset>`.
 - After upload, the UI uses HTTP 303 to redirect. If testing via curl, you may need `-L` to follow redirects.
+
+Logpoint Webhook Preset
+-----------------------
+- Outbound (UI → your Logpoint receiver):
+  - In Webhook tab, fill the Logpoint preset fields:
+    - `Scheme`: `http` or `https`
+    - `Host`: e.g., `logpoint-host`
+    - `X-API-Key`: your API key
+  - The UI builds `POST {scheme}://{host}/lphc/events/json` and sets `x-api-key`.
+  - Optionally paste a raw JSON template (e.g., `{"hello":"world"}`) to generate dynamic payloads.
+- Inbound (testing locally):
+  - UI app exposes `POST /lphc/events/json` as an alias, identical to `/api/webhook/incoming`.
+  - Standalone webhook service also exposes `POST /lphc/events/json`.
+  - Example test call:
+
+```
+curl -sS -X POST \
+  http://localhost:5030/lphc/events/json \
+  -H 'Content-Type: application/json' \
+  -H 'x-api-key: YOUR_KEY' \
+  -d '{"hello":"world"}'
+```
+
+Recommended Config Defaults
+---------------------------
+If you want defaults that match a Logpoint receiver, set the `webhook` section like this:
+
+```
+{
+  "webhook": {
+    "url": "http://logpoint-host/lphc/events/json",
+    "method": "POST",
+    "headers": { "x-api-key": "<api key>" },
+    "mps": 1.0
+  }
+}
+```
+
+These are only defaults; the Webhook UI lets you override URL, headers, and rate at runtime and also supports the Logpoint preset builder.
 
 UI Theme
 --------
