@@ -2,9 +2,13 @@
 import json
 import os
 import threading
+import atexit
+import signal
 from collections import deque
 import random
 import time
+import logging
+import sys
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Dict, List
@@ -18,6 +22,7 @@ from flask import (
     send_from_directory,
     url_for,
 )
+from flask import g
 from werkzeug.utils import secure_filename
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -45,6 +50,103 @@ The UI avoids session/flash features so no secret is required.
 
 
 # ----------------------------
+# ----------------------------
+# Logging
+# ----------------------------
+
+def init_logging():
+    level_name = (os.environ.get("LOG_LEVEL") or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        fmt = logging.Formatter(
+            fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        )
+        handler.setFormatter(fmt)
+        root.addHandler(handler)
+    root.setLevel(level)
+    # Quiet down werkzeug access logs unless debugging issues
+    try:
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    except Exception:
+        pass
+
+
+log = logging.getLogger("webapp")
+
+
+@app.before_request
+def _log_request_start():
+    try:
+        g._t0 = time.time()
+    except Exception:
+        pass
+    log.debug(
+        "request start method=%s path=%s remote=%s qs=%s",
+        request.method,
+        request.path,
+        request.remote_addr,
+        request.query_string.decode("utf-8", errors="replace"),
+    )
+
+
+@app.after_request
+def _log_request_end(resp: Response):
+    try:
+        dt = int((time.time() - getattr(g, "_t0", time.time())) * 1000)
+    except Exception:
+        dt = -1
+    # Minimize request logging; downgrade to DEBUG and skip chatty endpoints
+    if not str(request.path).startswith("/api/syslog/events"):
+        log.debug(
+            "request done method=%s path=%s status=%s bytes=%s dur_ms=%s",
+            request.method,
+            request.path,
+            resp.status_code,
+            resp.calculate_content_length() if hasattr(resp, "calculate_content_length") else resp.content_length,
+            dt,
+        )
+    return resp
+
+
+@app.teardown_request
+def _log_request_teardown(exc):
+    if exc is not None:
+        log.error("request error path=%s err=%s", request.path, exc)
+
+
+# ----------------------------
+# Graceful shutdown (always stop background services)
+# ----------------------------
+
+def _shutdown_services(*_args):
+    try:
+        stop_webhook_emitter()
+    except Exception:
+        pass
+    try:
+        stop_forwarder()
+    except Exception:
+        pass
+    try:
+        log.info("application shutdown: services stopped")
+    except Exception:
+        pass
+
+
+# Ensure cleanup on interpreter exit and common signals
+atexit.register(_shutdown_services)
+try:
+    signal.signal(signal.SIGINT, lambda s, f: (_shutdown_services(), os._exit(0)))
+    signal.signal(signal.SIGTERM, lambda s, f: (_shutdown_services(), os._exit(0)))
+except Exception:
+    # Signal setting may fail in non-main thread or restricted envs
+    pass
+
+
+# ----------------------------
 # Global state
 # ----------------------------
 
@@ -57,40 +159,49 @@ CURRENT_CONFIG: Dict = {}
 DATA_DIR: Path | None = None
 DATASETS_DIR: Path | None = None
 
-# Event broadcasting (simple in-process pub/sub)
-SUBSCRIBERS: List[Queue] = []
-EVENT_HISTORY = deque(maxlen=500)
+def _reset_runtime_state():
+    global TAIL_EVENTS, TAIL_SEQ, JSON_TEMPLATES, JSON_SAMPLES
+    global WEBHOOK_THREAD, WEBHOOK_STOP, WEBHOOK_SENT_COUNT, WEBHOOK_ERROR_COUNT, WEBHOOK_INBOUND, WEBHOOK_SEQ
+    # Live logs (lightweight, in-memory)
+    TAIL_EVENTS = deque(maxlen=300)
+    TAIL_SEQ = 0
+    # JSON dataset state (for REST/Webhook simulators)
+    JSON_TEMPLATES = {}
+    JSON_SAMPLES = {}
+    # Webhook mock (outbound emitter + inbound receiver)
+    WEBHOOK_THREAD = None
+    WEBHOOK_STOP = threading.Event()
+    WEBHOOK_SENT_COUNT = 0
+    WEBHOOK_ERROR_COUNT = 0
+    WEBHOOK_INBOUND = deque(maxlen=200)
+    WEBHOOK_SEQ = 0
 
-# JSON dataset state (for REST/Webhook simulators)
-JSON_TEMPLATES: Dict[str, dict] = {}
-JSON_SAMPLES: Dict[str, list] = {}
-
-# Webhook mock (outbound emitter + inbound receiver)
-WEBHOOK_THREAD: threading.Thread | None = None
-WEBHOOK_STOP = threading.Event()
-WEBHOOK_SENT_COUNT = 0
-WEBHOOK_ERROR_COUNT = 0
-WEBHOOK_INBOUND = deque(maxlen=200)
-
-
-def broadcast_event(evt: Dict):
-    EVENT_HISTORY.append(evt)
-    dead: List[Queue] = []
-    for q in list(SUBSCRIBERS):
-        try:
-            q.put_nowait(evt)
-        except Exception:
-            dead.append(q)
-    for q in dead:
-        try:
-            SUBSCRIBERS.remove(q)
-        except ValueError:
-            pass
+_reset_runtime_state()
 
 
 def tail_on_event(evt: Dict):
-    # Adapter used by TailManager to publish events
-    broadcast_event(evt)
+    # Convert tail manager events to logs (no SSE/UI stream)
+    try:
+        et = evt.get("type")
+        if et == "start":
+            # Downgrade per-file start/stop to DEBUG to reduce noise
+            log.debug("tail start file=%s", evt.get("file"))
+        elif et == "stop":
+            log.debug("tail stop file=%s", evt.get("file"))
+        elif et == "line":
+            # Avoid logging line content by default; emit at DEBUG with filename only
+            log.debug("tail line file=%s", evt.get("file"))
+        # Append to in-memory live buffer with sequence id
+        global TAIL_SEQ
+        TAIL_SEQ += 1
+        rec = dict(evt)
+        rec["seq"] = TAIL_SEQ
+        try:
+            TAIL_EVENTS.appendleft(rec)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def is_running() -> bool:
@@ -136,7 +247,19 @@ def start_forwarder(cfg: Dict):
     TAIL_MANAGER = manager
     MANAGER_THREAD = threading.Thread(target=manager.start, daemon=True)
     MANAGER_THREAD.start()
-    broadcast_event({"type": "status", "status": "started"})
+    log.info("forwarder started")
+
+
+def _append_webhook_inbound(entry: Dict):
+    """Append inbound webhook event with sequence id and trim buffer."""
+    try:
+        global WEBHOOK_SEQ
+        WEBHOOK_SEQ += 1
+        entry = dict(entry)
+        entry["seq"] = WEBHOOK_SEQ
+        WEBHOOK_INBOUND.appendleft(entry)
+    except Exception:
+        pass
 
 
 def stop_forwarder():
@@ -151,7 +274,7 @@ def stop_forwarder():
             MANAGER_THREAD.join(timeout=2.0)
         MANAGER_THREAD = None
         TAIL_MANAGER = None
-        broadcast_event({"type": "status", "status": "stopped"})
+    log.info("forwarder stopped")
 
 
 def load_current_config() -> Dict:
@@ -298,12 +421,20 @@ def syslog_page():
     # External service bases (optional), used if services run separately
     rest_base = os.environ.get("REST_BASE_URL", "")
     webhook_base = os.environ.get("WEBHOOK_BASE_URL", "")
+    # Provide facility/severity options for test send form
+    facility_names = sorted(list(FACILITY_MAP.keys()))
+    severity_names = sorted(list(SEVERITY_MAP.keys()))
+    # Seed initial live items (small sample)
+    initial_events = list(TAIL_EVENTS)[:50]
     return render_template(
         "syslog.html",
         running=is_running(),
         cfg=cfg,
         files=files,
         dest=dest,
+        facility_names=facility_names,
+        severity_names=severity_names,
+        initial_events=initial_events,
         rest_base=rest_base,
         webhook_base=webhook_base,
         section="syslog",
@@ -336,6 +467,7 @@ def webhook_page():
     wh_cfg = cfg.get("webhook", {})
     rest_base = os.environ.get("REST_BASE_URL", "")
     webhook_base = os.environ.get("WEBHOOK_BASE_URL", "")
+    initial_inbound = list(WEBHOOK_INBOUND)[:100]
     return render_template(
         "webhook.html",
         running=is_running(),
@@ -344,7 +476,7 @@ def webhook_page():
         webhook_cfg=wh_cfg,
         sent_count=WEBHOOK_SENT_COUNT,
         error_count=WEBHOOK_ERROR_COUNT,
-        inbound=list(WEBHOOK_INBOUND),
+        inbound=initial_inbound,
         rest_base=rest_base,
         webhook_base=webhook_base,
         section="webhook",
@@ -362,6 +494,151 @@ def start():
 def stop():
     stop_forwarder()
     return redirect(url_for("syslog_page"), code=303)
+
+
+@app.route("/syslog/test-send", methods=["POST"])
+def syslog_test_send():
+    """Send a test syslog message N times using current destination config.
+    Fields:
+    - message: text payload (required)
+    - facility: name from FACILITY_MAP keys (optional)
+    - severity: name from SEVERITY_MAP keys (optional)
+    - app_name: override app name (optional)
+    - count: number of times to send (optional, default 1, max 1000)
+    """
+    cfg = CURRENT_CONFIG or load_current_config()
+    syslog_cfg = cfg.get("syslog", {})
+    default_facility = (syslog_cfg.get("facility") or "user").lower()
+    default_severity = (syslog_cfg.get("severity") or "info").lower()
+    app_default = syslog_cfg.get("app_name") or "forwarder"
+    host_name = syslog_cfg.get("host_name") or None
+
+    msg = (request.form.get("message") or "").strip()
+    fac_name = (request.form.get("facility") or default_facility).lower()
+    sev_name = (request.form.get("severity") or default_severity).lower()
+    app_name = (request.form.get("app_name") or app_default).strip() or app_default
+    try:
+        count = int(request.form.get("count") or 1)
+    except Exception:
+        count = 1
+    if count < 1:
+        count = 1
+    if count > 1000:
+        count = 1000
+
+    if not msg:
+        return redirect(url_for("syslog_page", error="Message+is+required"), code=303)
+
+    facility = FACILITY_MAP.get(fac_name, FACILITY_MAP.get(default_facility, 1))
+    severity = SEVERITY_MAP.get(sev_name, SEVERITY_MAP.get(default_severity, 6))
+    procid = str(os.getpid())
+
+    def _send_tests(local_cfg: Dict, n: int):
+        sender = None
+        try:
+            sender = build_sender(local_cfg)
+            for _ in range(n):
+                syslog_msg = rfc5424_message(
+                    msg=msg,
+                    facility=facility,
+                    severity=severity,
+                    host_name=host_name,
+                    app_name=app_name,
+                    procid=procid,
+                )
+                try:
+                    sender.send(syslog_msg)
+                except Exception:
+                    # drop failed sends silently
+                    pass
+        finally:
+            try:
+                if sender is not None:
+                    sender.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_send_tests, args=(cfg, count), daemon=True).start()
+    return redirect(url_for("syslog_page", sent=count), code=303)
+
+
+@app.route("/syslog/replay", methods=["POST"])
+def syslog_replay():
+    """Replay a selected .log file line-by-line as syslog messages.
+    Accepts:
+    - filename: name of the file in the data dir
+    - mps: messages per second (optional, >0 to limit; blank/0 = unlimited)
+    """
+    filename = (request.form.get("filename") or "").strip()
+    if not filename:
+        return redirect(url_for("syslog_page", error="Missing+filename"), code=303)
+    # Resolve path within the data directory only
+    base_dir = get_data_dir()
+    target = (base_dir / filename)
+    try:
+        # Prevent path traversal
+        target.relative_to(base_dir)
+    except Exception:
+        return redirect(url_for("syslog_page", error="Invalid+path"), code=303)
+    if not target.exists() or not target.is_file():
+        return redirect(url_for("syslog_page", error="File+not+found"), code=303)
+
+    cfg = CURRENT_CONFIG or load_current_config()
+    syslog_cfg = cfg.get("syslog", {})
+    facility = FACILITY_MAP.get((syslog_cfg.get("facility") or "user").lower(), 1)
+    severity = SEVERITY_MAP.get((syslog_cfg.get("severity") or "info").lower(), 6)
+    app_name = syslog_cfg.get("app_name") or "forwarder"
+    host_name = syslog_cfg.get("host_name") or None
+    procid = str(os.getpid())
+
+    mps_raw = request.form.get("mps")
+    mps = None
+    try:
+        if mps_raw not in (None, ""):
+            mps = float(mps_raw)
+            if mps <= 0:
+                mps = None
+    except Exception:
+        mps = None
+    interval = (1.0 / mps) if (mps and mps > 0) else None
+
+    def _replay_file(pth: Path):
+        sender = None
+        try:
+            sender = build_sender(cfg)
+            log.info("replay started file=%s mps=%s", str(pth.name), (mps if mps else "unlimited"))
+            with open(pth, "r", encoding="utf-8", errors="replace") as fh:
+                next_send = time.perf_counter()
+                sent = 0
+                for line in fh:
+                    msg = line.rstrip("\r\n")
+                    if msg == "":
+                        continue
+                    try:
+                        # Send raw line (file already contains syslog-formatted messages)
+                        sender.send(msg)
+                        log.debug("replayed line file=%s", str(pth))
+                        sent += 1
+                    except Exception:
+                        pass
+                    if interval is not None:
+                        next_send += interval
+                        delay = next_send - time.perf_counter()
+                        if delay > 0:
+                            time.sleep(delay)
+        finally:
+            try:
+                if sender is not None:
+                    sender.close()
+            except Exception:
+                pass
+            try:
+                log.info("replay completed file=%s sent=%s", str(pth.name), sent)
+            except Exception:
+                pass
+
+    threading.Thread(target=_replay_file, args=(target,), daemon=True).start()
+    return redirect(url_for("syslog_page", uploaded=str(filename)), code=303)
 
 
 @app.route("/upload", methods=["POST"])
@@ -425,11 +702,8 @@ def upload():
             except Exception:
                 pass
             return redirect(f"{landing_for(context)}?error=Invalid+JSON+file+format", code=303)
-    # Emit an event so the UI can show upload confirmation in Live Log
-    try:
-        broadcast_event({"type": "upload", "filename": filename, "size": sz})
-    except Exception:
-        pass
+    # Minimal logger: single info about upload, rest at debug
+    log.info("upload saved filename=%s size=%s context=%s", filename, sz, context)
     # If a .log file was uploaded for Syslog, forward each line as syslog asynchronously
     if context == "syslog" and is_log:
         try:
@@ -441,49 +715,59 @@ def upload():
             host_name = syslog_cfg.get("host_name") or None
             procid = str(os.getpid())
 
+            # Optional rate limiting via messages-per-second (mps)
+            mps_raw = request.form.get("mps")
+            mps = None
+            try:
+                if mps_raw not in (None, ""):
+                    mps = float(mps_raw)
+                    if mps <= 0:
+                        mps = None  # treat non-positive as unlimited
+            except Exception:
+                mps = None
+            interval = (1.0 / mps) if (mps and mps > 0) else None
+
             def _forward_file(pth: Path):
                 sender = None
                 try:
                     sender = build_sender(cfg)
+                    log.info("upload replay started file=%s mps=%s", str(pth.name), (mps if mps else "unlimited"))
                     with open(pth, "r", encoding="utf-8", errors="replace") as fh:
+                        next_send = time.perf_counter()
+                        sent = 0
                         for line in fh:
                             msg = line.rstrip("\r\n")
                             if msg == "":
                                 continue
-                            syslog_msg = rfc5424_message(
-                                msg=msg,
-                                facility=facility,
-                                severity=severity,
-                                host_name=host_name,
-                                app_name=app_name,
-                                procid=procid,
-                            )
                             try:
-                                sender.send(syslog_msg)
-                                broadcast_event({
-                                    "type": "line",
-                                    "file": str(pth),
-                                    "filename": str(pth.name),
-                                    "app": app_name,
-                                    "facility": facility,
-                                    "severity": severity,
-                                    "timestamp": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).astimezone().isoformat(),
-                                    "message": msg,
-                                })
+                                # Send raw line (file already contains syslog-formatted messages)
+                                sender.send(msg)
+                                log.debug("forwarded line file=%s", str(pth))
+                                sent += 1
                             except Exception:
                                 # Drop line if sending fails
                                 pass
+                            # Rate control: simple pacing based on mps
+                            if interval is not None:
+                                next_send += interval
+                                # Sleep until the scheduled time; skip if we're behind
+                                delay = next_send - time.perf_counter()
+                                if delay > 0:
+                                    time.sleep(delay)
                 finally:
                     try:
                         if sender is not None:
                             sender.close()
                     except Exception:
                         pass
+                    try:
+                        log.info("upload replay completed file=%s sent=%s", str(pth.name), sent)
+                    except Exception:
+                        pass
 
             threading.Thread(target=_forward_file, args=(target,), daemon=True).start()
-        except Exception:
-            # Ignore forwarding errors; upload is still successful
-            pass
+        except Exception as e:
+            log.error("upload forwarding error file=%s err=%s", str(target), e)
     # Route back to originating section with success indicator
     return redirect(f"{landing_for(context)}?uploaded={filename}", code=303)
 
@@ -513,6 +797,137 @@ def api_json_logs(name: str):
     out = [samples[(start + i) % len(samples)] for i in range(max(1, min(count, 1000)))]
     return Response(json.dumps(out), mimetype="application/json")
 
+
+def _resolve_keyword(obj, key: str):
+    """Resolve a dotted key into obj. Returns the value or None.
+    If the resolved value is a dict, try common list fields.
+    """
+    if not key:
+        return obj
+    cur = obj
+    parts = [p for p in str(key).split('.') if p]
+    try:
+        for p in parts:
+            if isinstance(cur, dict):
+                cur = cur.get(p)
+            else:
+                return None
+    except Exception:
+        return None
+    # If dict, try to pick a list-like field
+    if isinstance(cur, dict):
+        candidates = ['logs', 'items', 'events', 'entries', 'data']
+        for k in candidates:
+            v = cur.get(k)
+            if isinstance(v, list):
+                return v
+        # else pick the first list field if any
+        for v in cur.values():
+            if isinstance(v, list):
+                return v
+    return cur
+
+
+@app.route("/api/json/quick/<name>")
+def api_json_quick(name: str):
+    """Quick tester: extract a list using a keyword path and return real or fake entries.
+    Query params:
+    - key: dotted path to a list or dict containing a list (e.g., 'logs' or 'data.logs')
+    - count: number of entries to return (default 10)
+    - mode: 'real' or 'fake' (default 'fake')
+    """
+    name = secure_filename(name)
+    try:
+        count = max(1, min(1000, int(request.args.get('count', 10))))
+    except Exception:
+        count = 10
+    mode = (request.args.get('mode') or 'fake').strip().lower()
+    raw_flag = (request.args.get('raw') or '').strip().lower()
+    raw = raw_flag in ('1', 'true', 'yes', 'on')
+    key = (request.args.get('key') or '').strip()
+
+    # Load raw dataset file
+    ddir = get_data_dir() / 'datasets'
+    src = ddir / f"{name}.json"
+    if not src.exists():
+        return {"error": "unknown dataset"}, 404
+    try:
+        with open(src, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+    except Exception:
+        return {"error": "failed to read dataset"}, 500
+
+    value = _resolve_keyword(data, key) if key else data
+    # If list is wrapped inside dict without explicit key and data is a list, use it directly
+    lst = None
+    if isinstance(value, list):
+        lst = value
+    elif isinstance(value, dict):
+        # Heuristic already tried; fall back: take first list field
+        for v in value.values():
+            if isinstance(v, list):
+                lst = v
+                break
+    if lst is None:
+        # If no list, treat the resolved value as a single object
+        base = value
+        if mode == 'real':
+            # Return at most one real entry if it's an object; otherwise wrap
+            if isinstance(base, dict):
+                items = [base][:count]
+            else:
+                items = [{"value": base}][:count]
+            if raw:
+                return Response(json.dumps(items), mimetype="application/json")
+            else:
+                resp = {
+                    "mode": mode,
+                    "requested": count,
+                    "returned": len(items),
+                    "total_available": len(items),
+                    "items": items,
+                }
+                return Response(json.dumps(resp), mimetype="application/json")
+        else:
+            # Fake: generate from the object (or wrap scalar)
+            if not isinstance(base, dict):
+                base = {"value": base}
+            items = generate_samples_from_template(base, count)
+            if raw:
+                return Response(json.dumps(items), mimetype="application/json")
+            else:
+                resp = {
+                    "mode": mode,
+                    "requested": count,
+                    "returned": len(items),
+                    "total_available": len(items),
+                    "items": items,
+                }
+                return Response(json.dumps(resp), mimetype="application/json")
+
+    total = len(lst)
+    items = []
+    if mode == 'real':
+        items = lst[:count]
+    else:
+        # fake: generate mutated samples from the first element (or empty dict)
+        base = lst[0] if lst else {}
+        if isinstance(base, dict):
+            items = generate_samples_from_template(base, count)
+        else:
+            # If base is not a dict, wrap in dict under 'value'
+            items = generate_samples_from_template({"value": base}, count)
+    if raw:
+        return Response(json.dumps(items), mimetype="application/json")
+    else:
+        resp = {
+            "mode": mode,
+            "requested": count,
+            "returned": len(items),
+            "total_available": total,
+            "items": items,
+        }
+        return Response(json.dumps(resp), mimetype="application/json")
 
 @app.route("/api/json/stream/<name>")
 def api_json_stream(name: str):
@@ -604,14 +1019,22 @@ def _http_post(url: str, body: bytes, headers: Dict[str, str] | None = None, met
         req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.getcode()
+            code = resp.getcode()
+            log.debug("http post ok url=%s code=%s", url, code)
+            return code
     except urllib.error.HTTPError as e:
-        return e.code
-    except Exception:
+        log.error("http error url=%s code=%s", url, getattr(e, 'code', None))
+        return getattr(e, 'code', None)
+    except urllib.error.URLError as e:
+        # Connection errors, DNS, refused, timeouts, etc.
+        log.error("http urlerror url=%s reason=%s", url, getattr(e, 'reason', e))
+        return None
+    except Exception as e:
+        log.exception("http unexpected error url=%s err=%s", url, e)
         return None
 
 
-def start_webhook_emitter(url: str, name: str, mps: float = 1.0, method: str = "POST", headers: Dict | None = None):
+def start_webhook_emitter(url: str, name: str, mps: float = 1.0, method: str = "POST", headers: Dict | None = None, copies: int = 1, interval_sec: float | None = None, max_events: int | None = None):
     global WEBHOOK_THREAD, WEBHOOK_SENT_COUNT, WEBHOOK_ERROR_COUNT
     ensure_json_loaded()
     if name not in JSON_SAMPLES:
@@ -624,26 +1047,29 @@ def start_webhook_emitter(url: str, name: str, mps: float = 1.0, method: str = "
     WEBHOOK_ERROR_COUNT = 0
 
     def run():
-        nonlocal url, name, mps, method, headers
+        nonlocal url, name, mps, method, headers, copies, interval_sec, max_events
         try:
-            broadcast_event({"type": "webhook", "status": "started", "name": name, "mps": mps, "url": url})
+            log.info("webhook emitter started name=%s interval_sec=%s count=%s url=%s", name, interval_sec, max_events, url)
             idx = 0
-            period = 1.0 / max(0.1, float(mps))
+            period = float(interval_sec) if interval_sec is not None else 1.0
             samples = JSON_SAMPLES[name]
+            remaining = int(max_events) if max_events is not None else None
             while not WEBHOOK_STOP.is_set():
                 payload = samples[idx % len(samples)]
                 body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
                 code = _http_post(url, body, headers=headers, method=method)
                 if code and 200 <= int(code) < 400:
-                    broadcast_event({"type": "webhook_sent", "code": code, "name": name})
                     globals()["WEBHOOK_SENT_COUNT"] += 1
                 else:
-                    broadcast_event({"type": "webhook_error", "code": code, "name": name})
                     globals()["WEBHOOK_ERROR_COUNT"] += 1
                 idx += 1
+                if remaining is not None:
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
                 time.sleep(period)
         finally:
-            broadcast_event({"type": "webhook", "status": "stopped", "name": name})
+            log.info("webhook emitter stopped name=%s", name)
 
     WEBHOOK_THREAD = threading.Thread(target=run, daemon=True)
     WEBHOOK_THREAD.start()
@@ -655,7 +1081,7 @@ def stop_webhook_emitter():
         WEBHOOK_THREAD.join(timeout=2.0)
 
 
-def start_webhook_emitter_samples(url: str, samples: list, mps: float = 1.0, method: str = "POST", headers: Dict | None = None, tag: str = "adhoc"):
+def start_webhook_emitter_samples(url: str, samples: list, mps: float = 1.0, method: str = "POST", headers: Dict | None = None, tag: str = "adhoc", copies: int = 1, interval_sec: float | None = None, max_events: int | None = None):
     """Start a webhook emitter using an explicit samples list instead of a named dataset."""
     global WEBHOOK_THREAD, WEBHOOK_SENT_COUNT, WEBHOOK_ERROR_COUNT
     if WEBHOOK_THREAD is not None and WEBHOOK_THREAD.is_alive():
@@ -666,25 +1092,28 @@ def start_webhook_emitter_samples(url: str, samples: list, mps: float = 1.0, met
     WEBHOOK_ERROR_COUNT = 0
 
     def run():
-        nonlocal url, samples, mps, method, headers, tag
+        nonlocal url, samples, mps, method, headers, tag, copies, interval_sec, max_events
         try:
-            broadcast_event({"type": "webhook", "status": "started", "name": tag, "mps": mps, "url": url})
+            log.info("webhook emitter started name=%s interval_sec=%s count=%s url=%s", tag, interval_sec, max_events, url)
             idx = 0
-            period = 1.0 / max(0.1, float(mps))
+            period = float(interval_sec) if interval_sec is not None else 1.0
+            remaining = int(max_events) if max_events is not None else None
             while not WEBHOOK_STOP.is_set():
                 payload = samples[idx % len(samples)]
                 body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
                 code = _http_post(url, body, headers=headers, method=method)
                 if code and 200 <= int(code) < 400:
-                    broadcast_event({"type": "webhook_sent", "code": code, "name": tag})
                     globals()["WEBHOOK_SENT_COUNT"] += 1
                 else:
-                    broadcast_event({"type": "webhook_error", "code": code, "name": tag})
                     globals()["WEBHOOK_ERROR_COUNT"] += 1
                 idx += 1
+                if remaining is not None:
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
                 time.sleep(period)
         finally:
-            broadcast_event({"type": "webhook", "status": "stopped", "name": tag})
+            log.info("webhook emitter stopped name=%s", tag)
 
     WEBHOOK_THREAD = threading.Thread(target=run, daemon=True)
     WEBHOOK_THREAD.start()
@@ -693,6 +1122,11 @@ def start_webhook_emitter_samples(url: str, samples: list, mps: float = 1.0, met
 @app.route("/api/webhook/incoming", methods=["POST","PUT"])
 def webhook_incoming():
     # Capture inbound webhook calls for testing
+    # Optional API key enforcement via env
+    expected = os.environ.get("LPHC_API_KEY") or os.environ.get("API_KEY")
+    if expected:
+        if (request.headers.get("x-api-key") or "") != expected:
+            return Response(json.dumps({"message": "Unauthorized"}), status=401, mimetype="application/json")
     try:
         data = request.get_json(silent=True)
     except Exception:
@@ -704,14 +1138,19 @@ def webhook_incoming():
         "path": request.path,
         "ts": int(time.time()),
     }
-    WEBHOOK_INBOUND.appendleft(entry)
-    broadcast_event({"type": "webhook_received", "path": request.path})
-    return {"status": "ok"}
+    _append_webhook_inbound(entry)
+    log.info("webhook received path=%s", request.path)
+    return {"message": "Request received successfully"}
 
 
 # Alias path to match Logpoint receiver flow
 @app.route("/lphc/events/json", methods=["POST"])  # matches: POST /lphc/events/json
 def webhook_incoming_logpoint():
+    # Optional API key enforcement via env
+    expected = os.environ.get("LPHC_API_KEY") or os.environ.get("API_KEY")
+    if expected:
+        if (request.headers.get("x-api-key") or "") != expected:
+            return Response(json.dumps({"message": "Unauthorized"}), status=401, mimetype="application/json")
     try:
         data = request.get_json(silent=True)
     except Exception:
@@ -723,9 +1162,64 @@ def webhook_incoming_logpoint():
         "path": request.path,
         "ts": int(time.time()),
     }
-    WEBHOOK_INBOUND.appendleft(entry)
-    broadcast_event({"type": "webhook_received", "path": request.path})
+    _append_webhook_inbound(entry)
+    log.info("webhook received path=%s", request.path)
     # Respond with 200 OK and JSON
+    return Response(json.dumps({"message": "Request received successfully"}), mimetype="application/json")
+
+
+@app.route("/lphc/events/xml", methods=["POST"])  # Receives XML data
+def webhook_incoming_logpoint_xml():
+    expected = os.environ.get("LPHC_API_KEY") or os.environ.get("API_KEY")
+    if expected:
+        if (request.headers.get("x-api-key") or "") != expected:
+            return Response(json.dumps({"message": "Unauthorized"}), status=401, mimetype="application/json")
+    try:
+        body = request.data.decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    entry = {
+        "headers": {k: v for k, v in request.headers.items()},
+        "xml": body,
+        "args": request.args.to_dict(flat=True),
+        "path": request.path,
+        "ts": int(time.time()),
+    }
+    _append_webhook_inbound(entry)
+    log.info("webhook received path=%s", request.path)
+    return Response(json.dumps({"message": "Request received successfully"}), mimetype="application/json")
+
+
+@app.route("/lphc/events", methods=["POST"])  # Receives raw data
+def webhook_incoming_logpoint_raw():
+    expected = os.environ.get("LPHC_API_KEY") or os.environ.get("API_KEY")
+    if expected:
+        if (request.headers.get("x-api-key") or "") != expected:
+            return Response(json.dumps({"message": "Unauthorized"}), status=401, mimetype="application/json")
+    content_type = request.headers.get("Content-Type", "")
+    payload = None
+    try:
+        if content_type.startswith("application/json"):
+            payload = request.get_json(silent=True)
+        if payload is None:
+            payload = request.data.decode("utf-8", errors="replace")
+    except Exception:
+        payload = request.data.decode("utf-8", errors="replace")
+    entry = {
+        "headers": {k: v for k, v in request.headers.items()},
+        "payload": payload,
+        "content_type": content_type,
+        "args": request.args.to_dict(flat=True),
+        "path": request.path,
+        "ts": int(time.time()),
+    }
+    _append_webhook_inbound(entry)
+    log.info("webhook received path=%s", request.path)
+    return Response(json.dumps({"message": "Request received successfully"}), mimetype="application/json")
+
+
+@app.route("/lphc/health", methods=["GET"])  # Health check endpoint
+def lphc_health_ui():
     return Response(json.dumps({"status": "ok"}), mimetype="application/json")
 
 
@@ -734,9 +1228,25 @@ def webhook_start():
     cfg = CURRENT_CONFIG or load_current_config()
     name = request.form.get("json_name")
     url_ = request.form.get("webhook_url") or cfg.get("webhook", {}).get("url")
-    mps = float(request.form.get("mps", cfg.get("webhook", {}).get("mps", 1)))
+    # Only two controls: count and interval_sec
+    try:
+        count = int(request.form.get("count") or 1)
+        if count < 1:
+            count = 1
+        if count > 100000:
+            count = 100000
+    except Exception:
+        count = 1
+    interval_raw = request.form.get("interval_sec")
+    try:
+        interval_sec = float(interval_raw) if interval_raw not in (None, "") else None
+        if interval_sec is not None and interval_sec <= 0:
+            interval_sec = 1.0
+    except Exception:
+        interval_sec = 1.0
     method = (request.form.get("method") or cfg.get("webhook", {}).get("method", "POST")).upper()
-    hdrs_raw = request.form.get("headers") or cfg.get("webhook", {}).get("headers")
+    # Do NOT read headers from config to avoid shipping secrets; headers only from user input
+    hdrs_raw = request.form.get("headers")
     hdrs = {}
     if isinstance(hdrs_raw, dict):
         hdrs = hdrs_raw
@@ -745,6 +1255,16 @@ def webhook_start():
             hdrs = json.loads(hdrs_raw)
         except Exception:
             hdrs = {}
+    # If no JSON headers provided, build from key-value arrays (hdr_name[], hdr_value[])
+    if not hdrs:
+        names = request.form.getlist("hdr_name[]")
+        values = request.form.getlist("hdr_value[]")
+        if names and values:
+            for k, v in zip(names, values):
+                k = (k or "").strip()
+                v = (v or "").strip()
+                if k:
+                    hdrs[k] = v
     # Logpoint quick preset support
     lp_host = (request.form.get("lp_host") or "").strip()
     lp_scheme = (request.form.get("lp_scheme") or "http").strip()
@@ -780,7 +1300,7 @@ def webhook_start():
         # If adhoc samples exist, allow start without named dataset
         if adhoc_samples and url_:
             try:
-                start_webhook_emitter_samples(url_, adhoc_samples, mps=mps, method=method, headers=hdrs, tag="adhoc")
+                start_webhook_emitter_samples(url_, adhoc_samples, method=method, headers=hdrs, tag="adhoc", interval_sec=interval_sec, max_events=count)
             except Exception:
                 pass
         else:
@@ -788,9 +1308,9 @@ def webhook_start():
     else:
         try:
             if adhoc_samples:
-                start_webhook_emitter_samples(url_, adhoc_samples, mps=mps, method=method, headers=hdrs, tag=f"adhoc:{name}")
+                start_webhook_emitter_samples(url_, adhoc_samples, method=method, headers=hdrs, tag=f"adhoc:{name}", interval_sec=interval_sec, max_events=count)
             else:
-                start_webhook_emitter(url_, name, mps=mps, method=method, headers=hdrs)
+                start_webhook_emitter(url_, name, method=method, headers=hdrs, interval_sec=interval_sec, max_events=count)
         except Exception:
             pass
     return redirect(url_for("webhook_page"), code=303)
@@ -802,38 +1322,93 @@ def webhook_stop():
     return redirect(url_for("webhook_page"), code=303)
 
 
-@app.route("/events")
-def events():
-    # Server-Sent Events endpoint
-    q: Queue = Queue()
-    # Seed with recent history for context
-    for evt in list(EVENT_HISTORY):
+@app.route("/lphc/schedule", methods=["POST"])  # Accept JSON or file to schedule outbound webhook
+def lphc_schedule():
+    # Optional API key enforcement via env
+    expected = os.environ.get("LPHC_API_KEY") or os.environ.get("API_KEY")
+    if expected:
+        if (request.headers.get("x-api-key") or "") != expected:
+            return Response(json.dumps({"message": "Unauthorized"}), status=401, mimetype="application/json")
+
+    # Determine samples from JSON body or uploaded file
+    samples = None
+    # Multipart file takes precedence
+    up = request.files.get("file")
+    if up and up.filename:
         try:
-            q.put_nowait(evt)
+            raw = up.read().decode("utf-8", errors="replace")
+            data = json.loads(raw)
+            if isinstance(data, list):
+                samples = data
+            elif isinstance(data, dict):
+                # Allow {"samples":[...]}
+                if isinstance(data.get("samples"), list):
+                    samples = data.get("samples")
+                else:
+                    samples = [data]
         except Exception:
-            break
-    SUBSCRIBERS.append(q)
+            samples = None
+    if samples is None:
+        body = request.get_json(silent=True)
+        if isinstance(body, list):
+            samples = body
+        elif isinstance(body, dict) and body:
+            if isinstance(body.get("samples"), list):
+                samples = body.get("samples")
+            else:
+                samples = [body]
 
-    def gen():
-        try:
-            while True:
-                try:
-                    evt = q.get(timeout=15)
-                except Empty:
-                    # keep-alive comment
-                    yield ": keep-alive\n\n"
-                    continue
-                data = json.dumps(evt)
-                yield f"data: {data}\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            try:
-                SUBSCRIBERS.remove(q)
-            except ValueError:
-                pass
+    if not samples:
+        return Response(json.dumps({"message": "Invalid or empty JSON payload"}), status=400, mimetype="application/json")
 
-    return Response(gen(), mimetype="text/event-stream")
+    # Determine rate and target
+    cfg = CURRENT_CONFIG or load_current_config()
+    # rate via mps or interval_sec
+    interval_sec = request.args.get("interval_sec") or (request.json or {}).get("interval_sec") if request.is_json else None
+    mps_q = request.args.get("mps")
+    try:
+        if interval_sec is not None:
+            interval = float(interval_sec)
+            mps = 1.0 / max(0.001, interval)
+        elif mps_q is not None:
+            mps = float(mps_q)
+        else:
+            mps = float(cfg.get("webhook", {}).get("mps", 1.0))
+    except Exception:
+        mps = 1.0
+
+    # Copies per tick
+    try:
+        copies = int(request.args.get("copies") or ((request.json or {}).get("copies") if request.is_json else None) or 1)
+        if copies < 1:
+            copies = 1
+    except Exception:
+        copies = 1
+
+    # target URL and headers
+    target_url = request.args.get("url") or (request.json or {}).get("target_url") if request.is_json else None
+    if not target_url:
+        target_url = cfg.get("webhook", {}).get("url")
+    if not target_url:
+        return Response(json.dumps({"message": "Missing target URL"}), status=400, mimetype="application/json")
+
+    # No default headers from config; allow override x-api-key via query/body only
+    headers_cfg = {}
+    # allow override x-api-key via query/body
+    override_api_key = request.args.get("api_key") or ((request.json or {}).get("api_key") if request.is_json else None)
+    hdrs = dict(headers_cfg)
+    if override_api_key:
+        hdrs["x-api-key"] = override_api_key
+
+    try:
+        start_webhook_emitter_samples(target_url, samples, mps=mps, method="POST", headers=hdrs, tag="schedule", copies=copies, interval_sec=float(interval_sec) if interval_sec else None)
+    except Exception as e:
+        return Response(json.dumps({"message": f"Failed to start schedule: {e}"}), status=500, mimetype="application/json")
+
+    return Response(json.dumps({"message": "Schedule started", "mps": mps}), mimetype="application/json")
+
+
+# SSE /events removed; use logs for visibility
 
 
 @app.route("/downloads/<path:filename>")
@@ -842,15 +1417,67 @@ def downloads(filename: str):
     return send_from_directory(str(get_data_dir()), filename, as_attachment=True)
 
 
+# ----------------------------
+# Live feeds (JSON)
+# ----------------------------
+
+@app.route("/api/syslog/events")
+def api_syslog_events():
+    try:
+        since = int(request.args.get("since", 0))
+    except Exception:
+        since = 0
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except Exception:
+        limit = 50
+    events = []
+    max_seq = since
+    for e in list(TAIL_EVENTS):
+        s = int(e.get("seq", 0))
+        if s > max_seq:
+            max_seq = s
+        if s > since:
+            events.append(e)
+        if len(events) >= limit:
+            break
+    return Response(json.dumps({"events": list(reversed(events)), "last_seq": max_seq}), mimetype="application/json")
+
+
+@app.route("/api/webhook/inbound_feed")
+def api_webhook_inbound_feed():
+    try:
+        since = int(request.args.get("since", 0))
+    except Exception:
+        since = 0
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except Exception:
+        limit = 50
+    items = []
+    max_seq = since
+    for e in list(WEBHOOK_INBOUND):
+        s = int(e.get("seq", 0))
+        if s > max_seq:
+            max_seq = s
+        if s > since:
+            items.append(e)
+        if len(items) >= limit:
+            break
+    return Response(json.dumps({"items": list(reversed(items)), "last_seq": max_seq}), mimetype="application/json")
+
 def create_app():
     # Lazy init for WSGI servers
     global CURRENT_CONFIG
+    init_logging()
     get_data_dir()  # ensure dirs exist early
     CURRENT_CONFIG = load_current_config()
+    log.info("webapp started")
     return app
 
 
 if __name__ == "__main__":
+    init_logging()
     get_data_dir()
     CURRENT_CONFIG = load_current_config()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5030)), debug=True)

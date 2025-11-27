@@ -1,19 +1,14 @@
 {% extends 'base.html' %}
 {% block content %}
-  <section style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; align-items:start;">
-    <article class="card">
-      <h3 style="margin:0 0 8px;">Live Log</h3>
-      <div class="hint">Recent forwarded lines and system events</div>
-      <div id="log" style="height:440px; overflow-y:auto; background:#0e0e0e; color:#e6e6e6; padding:10px; border-radius:10px; border:1px dashed var(--border); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:12px;"></div>
-    </article>
+  <section style="display:grid; grid-template-columns: 1fr; gap:16px; align-items:start;">
     <article class="card">
       <h3 style="margin:0 0 8px;">Controls</h3>
       <div class="hint">Start/stop and destination</div>
       <div class="controls" style="margin:8px 0 12px;">
-        <form method="post" action="{{ url_for('start') }}">
+        <form method="post" action="{{ url_for('start') }}" style="display:inline-block; margin-right:8px;">
           <button type="submit" class="primary" {{ 'disabled' if running else '' }}>Start</button>
         </form>
-        <form method="post" action="{{ url_for('stop') }}">
+        <form method="post" action="{{ url_for('stop') }}" style="display:inline-block;">
           <button type="submit" class="secondary" {{ '' if running else 'disabled' }}>Stop</button>
         </form>
       </div>
@@ -38,6 +33,12 @@
       <span class="hint">Forwarding lines as syslog messages…</span>
     </div>
   {% endif %}
+  {% if request.args.get('sent') %}
+    <div class="card" style="margin-top:16px; border-color: var(--success); background: rgba(48,209,88,0.08);">
+      <strong style="color:var(--success);">Test Sent:</strong>
+      <span>{{ request.args.get('sent') }} message(s) dispatched</span>
+    </div>
+  {% endif %}
 
   <section style="display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; margin-top:16px;">
     <article class="card">
@@ -46,10 +47,16 @@
         <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" id="uploadFormSyslog">
           <input type="hidden" name="context" value="syslog" />
           <input type="file" name="file" accept=".log" />
-          <div class="controls">
-            <button type="submit" class="primary" id="uploadBtnSyslog">Upload</button>
-            <span class="hint">Only .log files are allowed here.</span>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:8px; align-items:end;">
+            <div style="display:grid; gap:6px;">
+              <label class="hint">MPS <span class="hint">messages/second (optional)</span></label>
+              <input type="number" name="mps" min="0" step="0.1" placeholder="e.g., 50" />
+            </div>
+            <div class="controls" style="justify-content:flex-end;">
+              <button type="submit" class="primary" id="uploadBtnSyslog">Upload</button>
+            </div>
           </div>
+          <div class="hint">Only .log files are allowed. Leave MPS blank for fastest replay. To view locally, run: <code>nc -ul 0.0.0.0 514</code></div>
         </form>
       </div>
     </article>
@@ -59,8 +66,18 @@
       {% if files %}
         <ul style="list-style:none; padding:0; margin:8px 0 0;">
           {% for f in files %}
-            <li style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px dashed var(--border);">
-              <code style="color:#eaeaea;">{{ f }}</code>
+            <li style="display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; padding:8px 0; border-bottom:1px dashed var(--border);">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <code style="color:#eaeaea;">{{ f }}</code>
+                <form method="post" action="{{ url_for('syslog_replay') }}" style="display:flex; align-items:end; gap:8px;">
+                  <input type="hidden" name="filename" value="{{ f }}" />
+                  <label class="hint" style="display:flex; align-items:center; gap:6px;">
+                    MPS
+                    <input type="number" name="mps" min="0" step="0.1" placeholder="e.g., 50" style="width:110px;" />
+                  </label>
+                  <button type="submit" class="btn">Replay</button>
+                </form>
+              </div>
               <a class="btn" href="{{ url_for('downloads', filename=f) }}">Download</a>
             </li>
           {% endfor %}
@@ -70,37 +87,74 @@
       {% endif %}
     </article>
 
-    
+    <article class="card">
+      <h4 style="margin:0 0 8px;">Send Test Message</h4>
+      <form method="post" action="{{ url_for('syslog_test_send') }}" style="display:grid; gap:8px;">
+        <label class="hint">Message</label>
+        <textarea name="message" rows="3" placeholder="Hello from syslog forwarder"></textarea>
+
+        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:8px;">
+          <div style="display:grid; gap:6px;">
+            <label class="hint">Facility</label>
+            <select name="facility">
+              {% for f in facility_names %}
+                <option value="{{ f }}" {{ 'selected' if f==cfg.get('syslog', {}).get('facility', 'user')|lower else '' }}>{{ f }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:grid; gap:6px;">
+            <label class="hint">Severity</label>
+            <select name="severity">
+              {% for s in severity_names %}
+                <option value="{{ s }}" {{ 'selected' if s==cfg.get('syslog', {}).get('severity', 'info')|lower else '' }}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="display:grid; gap:6px;">
+            <label class="hint">App Name</label>
+            <input type="text" name="app_name" value="{{ cfg.get('syslog', {}).get('app_name', 'forwarder') }}" />
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:end;">
+          <div style="display:grid; gap:6px;">
+            <label class="hint">Count</label>
+            <input type="number" name="count" min="1" max="1000" value="1" />
+          </div>
+          <div class="controls" style="justify-content:flex-end;">
+            <button type="submit" class="primary">Send</button>
+          </div>
+        </div>
+      </form>
+      <div class="hint">Uses current destination ({{ dest.get('protocol','') }}://{{ dest.get('host','') }}:{{ dest.get('port','') }}).</div>
+    </article>
+    <article class="card">
+      <h4 style="margin:0 0 8px;">Live Logs <span class="hint">recent activity</span></h4>
+      <div class="controls" style="margin-bottom:8px; gap:8px;">
+        <button type="button" class="btn" id="loadLatestBtn">Load latest</button>
+        <button type="button" class="btn" id="clearLogBtn">Clear</button>
+        <span class="hint">No auto-refresh; loads only on request.</span>
+      </div>
+      <div id="liveLogBox" style="max-height:280px; overflow:auto; padding:10px; border-radius:8px; border:1px dashed var(--border); background: var(--surface-2);">
+        {% if initial_events %}
+          {% for e in initial_events %}
+            {% if e.type=='line' %}
+              <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; padding:2px 0;">
+                <span class="hint">{{ e.timestamp }}</span>
+                <code style="white-space:pre-wrap;">{{ e.message }}</code>
+              </div>
+            {% elif e.type in ('start','stop') %}
+              <div class="hint" style="font-size:12px; padding:2px 0;">{{ e.type }}: {{ e.file }}</div>
+            {% endif %}
+          {% endfor %}
+        {% else %}
+          <div class="hint">No recent activity.</div>
+        {% endif %}
+      </div>
+    </article>
   </section>
 
   <script>
-    const log = document.getElementById('log');
-    function append(line) {
-      const atBottom = (log.scrollTop + log.clientHeight) >= (log.scrollHeight - 5);
-      const div = document.createElement('div');
-      div.className = 'line';
-      div.textContent = line;
-      log.appendChild(div);
-      if (log.childElementCount > 2000) {
-        for (let i = 0; i < 500; i++) { if (log.firstChild) log.removeChild(log.firstChild); }
-      }
-      if (atBottom) { log.scrollTop = log.scrollHeight; }
-    }
-    const evt = new EventSource('{{ url_for('events') }}');
-    evt.onmessage = (e) => {
-      try {
-        const d = JSON.parse(e.data);
-        if (d.type === 'status') {
-          document.getElementById('statusText').textContent = d.status === 'started' ? 'Running' : 'Stopped';
-          const dot = document.getElementById('statusDot');
-          if (d.status === 'started') dot.classList.add('running'); else dot.classList.remove('running');
-        }
-        if (d.type === 'line') { append(`[tail] ${d.filename || ''} ${d.message}`); }
-        
-        if (d.type === 'upload') { append(`[upload] ${d.filename} (${d.size||'?'} bytes)`); }
-        if (d.type && d.type.startsWith('webhook')) { append(`[webhook] ${d.type}`); }
-      } catch (_) {}
-    };
     // Jiggle upload box briefly before submitting
     (function() {
       const form = document.getElementById('uploadFormSyslog');
@@ -115,6 +169,51 @@
           setTimeout(() => form.submit(), 280);
         });
       }
+    })();
+
+    // Manual load of recent events; no polling
+    (function(){
+      let lastSeq = 0;
+      const box = document.getElementById('liveLogBox');
+      const loadBtn = document.getElementById('loadLatestBtn');
+      const clearBtn = document.getElementById('clearLogBtn');
+      function escapeHTML(s){
+        return (s||'').replaceAll('&','&amp;').replaceAll('<','&lt;');
+      }
+      function render(events){
+        if (!box || !events || !events.length) return;
+        const atBottom = (box.scrollTop + box.clientHeight + 10) >= box.scrollHeight;
+        const frag = document.createDocumentFragment();
+        events.forEach(e => {
+          lastSeq = Math.max(lastSeq, e.seq || 0);
+          const div = document.createElement('div');
+          if (e.type === 'line') {
+            div.style.cssText = 'font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; padding:2px 0;';
+            div.innerHTML = `<span class=\"hint\">${escapeHTML(e.timestamp||'')}</span> <code style=\"white-space:pre-wrap;\">${escapeHTML(e.message||'')}</code>`;
+          } else if (e.type === 'start' || e.type === 'stop') {
+            div.className = 'hint';
+            div.style.cssText = 'font-size:12px; padding:2px 0;';
+            div.textContent = `${e.type}: ${e.file||''}`;
+          }
+          frag.appendChild(div);
+        });
+        box.appendChild(frag);
+        if (atBottom) {
+          box.scrollTop = box.scrollHeight;
+        }
+      }
+      async function loadOnce(){
+        try{
+          const r = await fetch(`/api/syslog/events?since=${lastSeq}`);
+          if (r.ok){
+            const j = await r.json();
+            render(j.events||[]);
+            if (typeof j.last_seq === 'number') lastSeq = Math.max(lastSeq, j.last_seq);
+          }
+        }catch(_){/* ignore */}
+      }
+      if (loadBtn) loadBtn.addEventListener('click', loadOnce);
+      if (clearBtn) clearBtn.addEventListener('click', () => { if (box) box.innerHTML=''; lastSeq = 0; });
     })();
   </script>
 {% endblock %}

@@ -7,6 +7,7 @@ import ssl
 import sys
 import threading
 import time
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Set
@@ -100,6 +101,7 @@ class UdpSender(SyslogSender):
         self.addr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.lock = threading.Lock()
+        logging.getLogger("syslog_forwarder").debug("udp sender init host=%s port=%s", host, port)
 
     def send(self, message: str) -> None:
         data = message.encode("utf-8", errors="replace")
@@ -120,11 +122,13 @@ class TcpSender(SyslogSender):
         self.ssl_context = ssl_context
         self.sock = None  # type: Optional[socket.socket]
         self.lock = threading.Lock()
+        self._last_err_log_ts = 0.0
         # Defer connecting until first send to avoid raising during
         # construction when the destination is unavailable.
         # Connection attempts are handled (with retry) inside send().
 
     def _connect(self) -> None:
+        logging.getLogger("syslog_forwarder").debug("tcp connect host=%s port=%s tls=%s", self.host, self.port, self.ssl_context is not None)
         s = socket.create_connection((self.host, self.port), timeout=10)
         if self.ssl_context is not None:
             s = self.ssl_context.wrap_socket(s, server_hostname=self.host)
@@ -144,7 +148,11 @@ class TcpSender(SyslogSender):
                 assert self.sock is not None
                 self.sock.sendall(framed)
             except Exception:
-                # Attempt one reconnect per failure path
+                # Attempt one reconnect per failure path; throttle error logs
+                now = time.time()
+                if (now - self._last_err_log_ts) > 10.0:
+                    logging.getLogger("syslog_forwarder").error("tcp send failed; attempting reconnect")
+                    self._last_err_log_ts = now
                 try:
                     if self.sock is not None:
                         try:
@@ -156,7 +164,11 @@ class TcpSender(SyslogSender):
                     assert self.sock is not None
                     self.sock.sendall(framed)
                 except Exception:
-                    # Drop message on persistent failure
+                    # Drop message on persistent failure; throttle log
+                    now2 = time.time()
+                    if (now2 - self._last_err_log_ts) > 10.0:
+                        logging.getLogger("syslog_forwarder").error("tcp send failed after reconnect; dropping message")
+                        self._last_err_log_ts = now2
                     pass
 
     def close(self) -> None:
@@ -175,6 +187,8 @@ def build_sender(cfg: Dict) -> SyslogSender:
     host = dest.get("host", "127.0.0.1")
     port = int(dest.get("port", 514))
     protocol = dest.get("protocol", "udp").lower()
+    # Reduce noise: sender build is debug-level
+    logging.getLogger("syslog_forwarder").debug("build sender host=%s port=%s proto=%s", host, port, protocol)
 
     if protocol == "udp":
         return UdpSender(host, port)
@@ -246,6 +260,7 @@ class FileTailer(threading.Thread):
             f = self._open_file()
         except FileNotFoundError:
             # If file disappears, just exit thread
+            logging.getLogger("syslog_forwarder").warning("file not found; tailer exit file=%s", str(self.path))
             return
         procid = str(os.getpid())
         last_inode = None
@@ -260,6 +275,7 @@ class FileTailer(threading.Thread):
                 try:
                     st = os.stat(self.path)
                     if last_inode is not None and st.st_ino != last_inode:
+                        logging.getLogger("syslog_forwarder").debug("file rotated; reopening file=%s", str(self.path))
                         f.close()
                         f = self._open_file()
                         last_inode = os.fstat(f.fileno()).st_ino
@@ -296,6 +312,7 @@ class FileTailer(threading.Thread):
                         pass
             except Exception:
                 # Drop line on failure
+                logging.getLogger("syslog_forwarder").error("failed to send line file=%s", str(self.path))
                 pass
         try:
             f.close()
@@ -343,6 +360,7 @@ class TailManager:
 
     def start(self):
         # Start existing files
+        logging.getLogger("syslog_forwarder").info("tail manager start pattern=%s dir=%s", self.pattern, str(self.directory))
         for p in sorted(self._scan()):
             self._start_tailer(p)
         # Rescan loop
@@ -379,6 +397,8 @@ class TailManager:
         )
         t.start()
         self.tailers[path] = t
+        # Downgrade per-file tailer start to debug to reduce noise
+        logging.getLogger("syslog_forwarder").debug("tailer started file=%s", str(path))
         if self.on_event is not None:
             try:
                 self.on_event(
@@ -395,6 +415,8 @@ class TailManager:
         t = self.tailers.pop(path, None)
         if t is not None:
             t.stop()
+        # Downgrade per-file tailer stop to debug to reduce noise
+        logging.getLogger("syslog_forwarder").debug("tailer stopped file=%s", str(path))
         if self.on_event is not None:
             try:
                 self.on_event(
@@ -465,6 +487,7 @@ def parse_args():
     p.add_argument("--severity", help="Default severity (e.g. info, warn)")
     p.add_argument("--app", help="App name for syslog header")
     p.add_argument("--hostname", help="Override hostname in syslog header")
+    p.add_argument("--log-level", choices=["debug", "info", "error"], help="Logging level (default: INFO or $LOG_LEVEL)")
     return p.parse_args()
 
 
@@ -510,6 +533,22 @@ def apply_overrides(cfg: Dict, args) -> Dict:
         cfg.setdefault("syslog", {})["host_name"] = args.hostname
 
     return cfg
+
+
+def init_logging(level_name: Optional[str] = None):
+    # Level precedence: explicit arg -> env LOG_LEVEL -> INFO
+    lvl = level_name or os.environ.get("LOG_LEVEL") or "INFO"
+    lvl = str(lvl).upper()
+    level = getattr(logging, lvl, logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        h = logging.StreamHandler(sys.stdout)
+        h.setFormatter(logging.Formatter(
+            fmt="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S%z",
+        ))
+        root.addHandler(h)
+    root.setLevel(level)
 
 
 def main():
@@ -563,4 +602,12 @@ def main():
 
 
 if __name__ == "__main__":
+    # Initialize logging before main
+    try:
+        args = parse_args()
+        init_logging(args.log_level.upper() if getattr(args, "log_level", None) else None)
+        # re-use parsed args in main by re-parsing in main; harmless but ensures logging early
+    except SystemExit:
+        # argparse may exit on -h; ensure no duplicate output
+        raise
     main()

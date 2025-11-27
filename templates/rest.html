@@ -37,16 +37,51 @@
       <div>
         <div class="card" style="background:#101010;">
           <h4 style="margin:0 0 8px;">Quick Tester</h4>
-          <div class="hint">Fetch a page and preview results.</div>
+          <div class="hint">Extract entries by keyword and preview. Choose real (use entries from file) or fake (generate samples).</div>
           <div style="display:grid; gap:8px; margin-top:8px;">
             <label>Dataset
               <select id="ds" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
                 {% for j in json_sets %}<option value="{{ j }}">{{ j }}</option>{% endfor %}
               </select>
             </label>
-            <label>Page <input id="page" type="number" min="1" value="1" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/></label>
-            <label>Per Page <input id="pp" type="number" min="1" max="200" value="20" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/></label>
-            <div class="controls"><button id="fetchBtn" class="primary" {{ '' if json_sets else 'disabled' }}>Fetch</button></div>
+            <label style="display:block;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span>Entries path (optional)</span>
+                <button id="kwInfoBtn" type="button" class="btn" title="How to choose the entries path" style="padding:4px 8px; font-size:12px;">ⓘ Info</button>
+              </div>
+              <input id="kw" placeholder="e.g. logs or data.logs (optional)" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+              <div class="hint">Leave empty to auto-detect a list (e.g., logs/items/events) or use the entire object if no list is found.</div>
+              <div id="kwHelp" class="card" style="display:none; margin-top:8px; background:#101010;">
+                <strong>What is the entries path?</strong>
+                <div class="hint" style="margin-top:6px;">
+                  Provide a dotted path to the array of log entries inside your JSON. Examples:
+                </div>
+                <ul style="margin:8px 0 0 16px; padding:0;">
+                  <li style="margin:4px 0;">Top-level array: leave empty.</li>
+                  <li style="margin:4px 0;">{ "logs": [ { ... } ] } ➜ use <code>logs</code></li>
+                  <li style="margin:4px 0;">{ "data": { "logs": [ { ... } ] } } ➜ use <code>data.logs</code></li>
+                </ul>
+                <div class="hint" style="margin-top:8px;">
+                  If empty, we try common fields like <code>logs</code>, <code>items</code>, <code>events</code>, <code>entries</code>, <code>data</code>. For <em>fake</em> mode, we generate samples based on the first entry’s shape.
+                </div>
+              </div>
+            </label>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+              <label>Count <input id="cnt" type="number" min="1" max="1000" value="10" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/></label>
+              <label>Mode
+                <select id="mode" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
+                  <option value="fake" selected>fake (generate)</option>
+                  <option value="real">real (from file)</option>
+                </select>
+              </label>
+            </div>
+            <label style="display:flex; align-items:center; gap:8px;">
+              <input id="raw" type="checkbox" checked />
+              <span>Raw output (no wrapper)</span>
+            </label>
+            <div class="controls">
+              <button id="fetchBtn" class="primary" {{ '' if json_sets else 'disabled' }}>Fetch</button>
+            </div>
             <pre id="out" style="margin:0; max-height:280px; overflow:auto; background:#0e0e0e; color:#e6e6e6; padding:12px; border-radius:8px;">Select a dataset.</pre>
           </div>
         </div>
@@ -59,11 +94,17 @@
       btn.addEventListener('click', async (e) => {
         e.preventDefault();
         const name = document.getElementById('ds').value;
-        const page = document.getElementById('page').value || 1;
-        const pp = document.getElementById('pp').value || 20;
+        const kwRaw = document.getElementById('kw').value || '';
+        const kw = encodeURIComponent(kwRaw);
+        const cnt = encodeURIComponent(document.getElementById('cnt').value || 10);
+        const mode = encodeURIComponent(document.getElementById('mode').value || 'fake');
+        const raw = document.getElementById('raw')?.checked;
         const base = {{ (rest_base|tojson) if rest_base is defined else '""' }};
         const baseClean = base ? base.replace(/\/$/, '') : '';
-        const url = `${baseClean}/api/rest/${encodeURIComponent(name)}?page=${page}&per_page=${pp}`;
+        const params = new URLSearchParams({ count: cnt, mode });
+        if (kwRaw.trim() !== '') params.set('key', kwRaw.trim());
+        if (raw) params.set('raw', 'true');
+        const url = `${baseClean}/api/json/quick/${encodeURIComponent(name)}?${params.toString()}`;
         const out = document.getElementById('out');
         out.textContent = `GET ${url}\n...`;
         try {
@@ -75,6 +116,17 @@
         }
       });
     }
+    // Toggle entries path help
+    (function() {
+      const infoBtn = document.getElementById('kwInfoBtn');
+      const help = document.getElementById('kwHelp');
+      if (infoBtn && help) {
+        infoBtn.addEventListener('click', () => {
+          const visible = help.style.display !== 'none';
+          help.style.display = visible ? 'none' : 'block';
+        });
+      }
+    })();
     // Jiggle upload box briefly before submitting
     (function() {
       const form = document.getElementById('uploadFormRest');

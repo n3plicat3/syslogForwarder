@@ -130,7 +130,7 @@ Minimal Config
 - `syslog`: `{ facility, severity, app_name, host_name? }`
 - `files`: `{ pattern: "*.log[,*.txt]", read_from_beginning, rescan_interval_sec }`
 - `tls`: `{ ca_file?, cert_file?, key_file?, verify_mode: required|optional|none }`
-- `webhook` (optional defaults): `{ url?, method?, headers?, mps? }`
+- `webhook` (optional defaults): `{ url?, method?, mps? }`
 
 Tips
 ----
@@ -161,22 +161,11 @@ curl -sS -X POST \
   -d '{"hello":"world"}'
 ```
 
-Recommended Config Defaults
----------------------------
-If you want defaults that match a Logpoint receiver, set the `webhook` section like this:
-
-```
-{
-  "webhook": {
-    "url": "http://logpoint-host/lphc/events/json",
-    "method": "POST",
-    "headers": { "x-api-key": "<api key>" },
-    "mps": 1.0
-  }
-}
-```
-
-These are only defaults; the Webhook UI lets you override URL, headers, and rate at runtime and also supports the Logpoint preset builder.
+Security Note
+-------------
+- Do not commit or bake API keys into `config.json` or images.
+- Provide secrets at runtime only (form fields, CLI, or environment).
+- The Webhook UI supports a Logpoint preset where you enter your own `x-api-key`; it is not stored.
 
 UI Theme
 --------

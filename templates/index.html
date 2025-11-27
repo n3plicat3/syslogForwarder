@@ -84,12 +84,7 @@
     <!-- Flash messages removed: no sessions or secrets used. -->
 
     <main>
-      <section class="grid">
-        <article class="card">
-          <h3>Live Log</h3>
-          <div class="sub">Recent forwarded lines and system events</div>
-          <div id="log" aria-live="polite" aria-label="Live log"></div>
-        </article>
+      <section class="grid" style="grid-template-columns: 1fr;">
         <article class="card">
           <h3>Controls</h3>
           <div class="sub">Start/stop and destination</div>
@@ -216,9 +211,7 @@
         } catch (err) { /* ignore */ }
       }
 
-      const es = new EventSource('{{ url_for('events') }}');
-      es.onmessage = render;
-      es.onerror = () => {};
+      // Live Log removed; using server-side logs instead.
 
       // Upload with progress
       const form = document.getElementById('uploadForm');

@@ -9,23 +9,29 @@
   <section style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; align-items:start;">
     <article class="card">
       <h3 style="margin:0 0 8px;">Webhook Emitter</h3>
-      <div class="hint">Send payloads to your receiver at a fixed rate. Use a dataset or paste a raw JSON template for dynamic generation.</div>
+      <div class="hint">Send payloads to your receiver at a fixed rate. Paste JSON or choose a sample to test. No API keys are stored — provide them at send time only.</div>
       <form method="post" action="{{ url_for('webhook_start') }}" style="display:grid; gap:10px; margin-top:10px;">
-        <label>Dataset
-          <select name="json_name" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
-            {% for j in json_sets %}<option value="{{ j }}">{{ j }}</option>{% endfor %}
-          </select>
-        </label>
-        <label>Raw JSON template (optional)
-          <textarea name="raw_json" rows="4" placeholder='{"hello":"world"}' style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"></textarea>
-          <div class="hint">If provided, this template is used to generate dynamic samples (ignores dataset selection).</div>
+        <label>JSON payload
+          <textarea id="rawJsonBox" name="raw_json" rows="6" placeholder='{"event":"test_success","message":"Test is successful","status":"ok","timestamp":"2025-01-01T12:00:00Z"}' style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"></textarea>
+          <div class="hint">Paste your JSON or insert a sample below.</div>
+          <div class="controls" style="margin-top:6px; gap:6px; flex-wrap:wrap;">
+            <select id="samplePicker" style="min-width:220px; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
+              <option value="">Choose a sample…</option>
+              <option value="test_success">Test: Success notification</option>
+              <option value="github_push">GitHub: Push event</option>
+              <option value="stripe_payment">Stripe: payment_intent.succeeded</option>
+              <option value="generic_alert">Generic: Alert event</option>
+            </select>
+            <button type="button" class="btn" id="insertSampleBtn">Insert sample</button>
+            <button type="button" class="btn" id="clearJsonBtn">Clear</button>
+          </div>
         </label>
         <label>Target URL
           <input name="webhook_url" value="{{ webhook_cfg.get('url','') }}" placeholder="https://example/webhook" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
         </label>
         <div class="card" style="padding:8px;">
           <div style="font-weight:600; margin-bottom:6px;">Quick preset: Logpoint</div>
-          <div class="hint">Builds <code>{scheme}://{host}/lphc/events/json</code> and sets <code>x-api-key</code>.</div>
+          <div class="hint">Builds <code>{scheme}://{host}/lphc/events/json</code> and can set <code>x-api-key</code> you enter.</div>
           <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px;">
             <label>Scheme
               <select name="lp_scheme" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
@@ -40,8 +46,12 @@
               <input name="lp_api_key" placeholder="&lt;api key&gt;" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
             </label>
           </div>
+          <div class="controls" style="margin-top:8px;">
+            <button type="button" class="btn" id="useLocalListenerBtn">Use local listener</button>
+            <span class="hint">Sets host to {{ request.host }} and scheme to http.</span>
+          </div>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px;">
           <label>Method
             <select name="method" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">
               {% set m = (webhook_cfg.get('method') or 'POST').upper() %}
@@ -49,13 +59,29 @@
               <option value="PUT" {{ 'selected' if m=='PUT' else '' }}>PUT</option>
             </select>
           </label>
-          <label>Messages per second
-            <input type="number" step="0.1" name="mps" value="{{ webhook_cfg.get('mps',1) }}" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+          <label>Times
+            <input type="number" step="1" min="1" name="count" value="1" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+          </label>
+          <label>After seconds
+            <input type="number" step="0.1" min="0.1" name="interval_sec" value="1" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
           </label>
         </div>
-        <label>Headers (JSON object)
-          <textarea name="headers" rows="4" style="width:100%; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;">{{ (webhook_cfg.get('headers')|tojson if webhook_cfg.get('headers') else '{}') }}</textarea>
-        </label>
+
+        <div class="card" style="padding:8px;">
+          <div style="font-weight:600; margin-bottom:6px;">Headers</div>
+          <div id="hdrRows" style="display:grid; gap:6px;">
+            <div class="controls" data-row>
+              <input type="text" name="hdr_name[]" placeholder="Header-Name" style="flex:1; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+              <input type="text" name="hdr_value[]" placeholder="Header-Value" style="flex:2; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+              <button type="button" class="btn" onclick="this.parentElement.remove()">✕</button>
+            </div>
+          </div>
+          <div class="controls" style="margin-top:6px;">
+            <button type="button" class="btn" id="addHdrBtn">Add header</button>
+            <span class="hint">Minimal: add only what you need.</span>
+          </div>
+          <input type="hidden" name="headers" id="headersJson" value="{}" />
+        </div>
         <div class="controls">
           <button type="submit" class="primary">Start</button>
           <button class="secondary" formmethod="post" formaction="{{ url_for('webhook_stop') }}">Stop</button>
@@ -66,16 +92,23 @@
 
     <article class="card">
       <h3 style="margin:0 0 8px;">Inbound Receiver</h3>
-      <div class="hint">Optional endpoints you can point a webhook at while testing.</div>
-      <code>/api/webhook/incoming</code>
-      <div class="hint" style="margin-top:6px;">Logpoint-compatible alias:</div>
-      <code>/lphc/events/json</code>
-      <div id="inboundBox" style="max-height:360px; overflow:auto; padding:10px; border-radius:8px; margin-top:8px; border:1px dashed var(--border);">
+      <div class="hint">Endpoints you can target while testing (e.g., from localhost).</div>
+      <div style="display:grid; gap:6px; margin-top:6px;">
+        <div>
+          <div class="hint">Generic JSON</div>
+          <a href="{{ request.host_url.rstrip('/') }}/api/webhook/incoming" target="_blank"><code>{{ request.host_url.rstrip('/') }}/api/webhook/incoming</code></a>
+        </div>
+        <div>
+          <div class="hint">Logpoint-compatible alias</div>
+          <a href="{{ request.host_url.rstrip('/') }}/lphc/events/json" target="_blank"><code>{{ request.host_url.rstrip('/') }}/lphc/events/json</code></a>
+        </div>
+      </div>
+      <div id="inboundBox" style="max-height:360px; overflow:auto; padding:10px; border-radius:8px; margin-top:8px; border:1px dashed var(--border); background: var(--surface-2);">
         {% if inbound %}
           {% for e in inbound %}
             <div style="border-bottom:1px dashed var(--border); padding:6px 0;">
               <div class="hint">ts={{ e['ts'] }}</div>
-              <pre style="margin:0; white-space:pre-wrap;">{{ e['json'] | tojson(indent=2) }}</pre>
+              <pre style="margin:0; white-space:pre-wrap;">{{ e.get('json') | tojson(indent=2) if e.get('json') else (e.get('payload') or e.get('xml') or '') }}</pre>
             </div>
           {% endfor %}
         {% else %}
@@ -84,4 +117,148 @@
       </div>
     </article>
   </section>
+  <script>
+    (function(){
+      const box = document.getElementById('rawJsonBox');
+      const picker = document.getElementById('samplePicker');
+      const insertBtn = document.getElementById('insertSampleBtn');
+      const clearBtn = document.getElementById('clearJsonBtn');
+
+      const samples = {
+        test_success: {
+          event: "test_success",
+          message: "Test is successful",
+          status: "ok",
+          timestamp: new Date().toISOString(),
+          meta: { source: "webhook-simulator", version: 1 }
+        },
+        github_push: {
+          ref: "refs/heads/main",
+          before: "a1b2c3d4",
+          after: "d4c3b2a1",
+          repository: { name: "example-repo", full_name: "acme/example-repo" },
+          pusher: { name: "octocat", email: "octo@example.com" },
+          commits: [{ id: "d4c3b2a1", message: "Fix: update README", timestamp: new Date().toISOString() }],
+          sender: { login: "octocat" }
+        },
+        stripe_payment: {
+          id: "evt_1ABCDEF1234567",
+          type: "payment_intent.succeeded",
+          created: Math.floor(Date.now() / 1000),
+          data: {
+            object: {
+              id: "pi_3XYZ",
+              amount: 4200,
+              currency: "usd",
+              status: "succeeded",
+              charges: { data: [{ receipt_url: "https://example/receipt/123" }] }
+            }
+          }
+        },
+        generic_alert: {
+          event: "alert",
+          severity: "info",
+          title: "Deployment completed",
+          description: "Service api-gateway deployed successfully",
+          environment: "prod",
+          ts: new Date().toISOString()
+        }
+      };
+
+      function insertSample() {
+        const key = picker && picker.value;
+        if (!key || !samples[key]) return;
+        try {
+          const text = JSON.stringify(samples[key], null, 2);
+          if (box) box.value = text;
+        } catch (e) { /* ignore */ }
+      }
+
+      if (insertBtn) insertBtn.addEventListener('click', insertSample);
+      if (clearBtn) clearBtn.addEventListener('click', () => { if (box) box.value=''; });
+
+      // Quick fill for local listener
+      const useLocal = document.getElementById('useLocalListenerBtn');
+      if (useLocal) {
+        useLocal.addEventListener('click', () => {
+          const host = document.querySelector('input[name="lp_host"]');
+          const scheme = document.querySelector('select[name="lp_scheme"]');
+          if (host) host.value = window.location.host;
+          if (scheme) scheme.value = 'http';
+          // Also hint target URL box
+          const urlBox = document.querySelector('input[name="webhook_url"]');
+          if (urlBox) urlBox.value = `${window.location.protocol}//${window.location.host}/lphc/events/json`;
+        });
+      }
+    })();
+
+    // Live inbound feed polling
+    (function(){
+      let lastSeq = 0;
+      const box = document.getElementById('inboundBox');
+      function render(items){
+        if (!box || !items || !items.length) return;
+        const atBottom = (box.scrollTop + box.clientHeight + 10) >= box.scrollHeight;
+        const frag = document.createDocumentFragment();
+        items.forEach(e => {
+          lastSeq = Math.max(lastSeq, e.seq || 0);
+          const div = document.createElement('div');
+          div.style.cssText = 'border-bottom:1px dashed var(--border); padding:6px 0;';
+          const ts = document.createElement('div');
+          ts.className = 'hint';
+          ts.textContent = `ts=${e.ts||''}`;
+          const pre = document.createElement('pre');
+          pre.style.cssText = 'margin:0; white-space:pre-wrap;';
+          const body = (e.json!==undefined && e.json!==null) ? JSON.stringify(e.json, null, 2) : (e.payload || e.xml || '');
+          pre.textContent = body;
+          div.appendChild(ts); div.appendChild(pre);
+          frag.appendChild(div);
+        });
+        box.appendChild(frag);
+        if (atBottom) box.scrollTop = box.scrollHeight;
+      }
+      async function poll(){
+        try{
+          const r = await fetch(`/api/webhook/inbound_feed?since=${lastSeq}`);
+          if (r.ok){
+            const j = await r.json();
+            render(j.items||[]);
+            if (typeof j.last_seq === 'number') lastSeq = Math.max(lastSeq, j.last_seq);
+          }
+        }catch(_){/* ignore */}
+        setTimeout(poll, 1500);
+      }
+      poll();
+    })();
+  </script>
 {% endblock %}
+      // Header rows add
+      const hdrRows = document.getElementById('hdrRows');
+      const addHdrBtn = document.getElementById('addHdrBtn');
+      function addHdrRow() {
+        const row = document.createElement('div');
+        row.className = 'controls';
+        row.setAttribute('data-row','');
+        row.innerHTML = `
+          <input type="text" name="hdr_name[]" placeholder="Header-Name" style="flex:1; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+          <input type="text" name="hdr_value[]" placeholder="Header-Value" style="flex:2; background:#0f0f0f; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:8px;"/>
+          <button type="button" class="btn" onclick="this.parentElement.remove()">✕</button>
+        `;
+        hdrRows.appendChild(row);
+      }
+      if (addHdrBtn) addHdrBtn.addEventListener('click', addHdrRow);
+
+      // Before submit, serialize headers to JSON
+      const form = document.querySelector('form[action$="/webhook/start"]');
+      const headersJson = document.getElementById('headersJson');
+      if (form && headersJson) {
+        form.addEventListener('submit', () => {
+          const names = Array.from(form.querySelectorAll('input[name="hdr_name[]"]')).map(i => i.value.trim());
+          const values = Array.from(form.querySelectorAll('input[name="hdr_value[]"]')).map(i => i.value);
+          const out = {};
+          for (let i=0;i<names.length;i++) {
+            if (names[i]) out[names[i]] = values[i] || '';
+          }
+          headersJson.value = JSON.stringify(out);
+        });
+      }

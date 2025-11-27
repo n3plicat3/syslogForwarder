@@ -2,7 +2,7 @@
   "destination": {
     "host": "127.0.0.1",
     "port": 514,
-    "protocol": "tcp"
+    "protocol": "udp"
   },
   "tls": {
     "enabled": false,
@@ -23,9 +23,8 @@
     "severity": "info"
   },
   "webhook": {
-    "url": "http://logpoint-host/lphc/events/json",
+    "url": "",
     "method": "POST",
-    "headers": { "x-api-key": "<api key>" },
     "mps": 1.0
   }
 }
