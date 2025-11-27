@@ -1,0 +1,12 @@
+192.168.10.22 - - [23/Aug/2025:09:15:33 +0000] "GET /index.html HTTP/1.1" 200 5120 "-" "Mozilla/5.0"
+192.168.10.25 - - [23/Aug/2025:09:15:34 +0000] "POST /login HTTP/1.1" 302 1234 "https://site.com/" "Chrome/116.0"
+10.0.0.5 - - [23/Aug/2025:09:15:35 +0000] "GET /api/v1/data HTTP/1.1" 500 230 "-" "curl/7.74.0"
+172.16.0.10 - - [23/Aug/2025:09:15:36 +0000] "GET /dashboard HTTP/1.1" 403 890 "-" "Mozilla/5.0"
+192.168.10.50 - - [23/Aug/2025:09:15:37 +0000] "GET /favicon.ico HTTP/1.1" 404 209 "-" "Mozilla/5.0"
+203.0.113.25 - - [23/Aug/2025:09:15:38 +0000] "PUT /api/v1/upload HTTP/1.1" 201 5678 "-" "PostmanRuntime/7.29"
+2025-08-23 09:16:01,122 INFO  [UserService] User login successful: user_id=103, ip=192.168.10.22
+2025-08-23 09:16:02,544 WARN  [PaymentService] Payment delayed, retrying transaction_id=TX89213
+2025-08-23 09:16:04,991 ERROR [OrderService] Failed to create order: NullPointerException at Order.java:211
+2025-08-23 09:16:06,673 DEBUG [CacheManager] Cache miss for key session:7fhd8a3d
+2025-08-23 09:16:08,410 INFO  [NotificationService] Email sent to customer@example.com
+2025-08-23 09:16:09,120 FATAL [AuthService] Unauthorized access attempt from 10.0.0.15

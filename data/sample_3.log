@@ -1,5 +1,0 @@
-at Nov 22 00:46:57.176 Usb Host Notification Apple80211Set: seqNum 2431 Total 0 chg 0 en0
-Sat Nov 22 00:46:57.179 Usb Host Notification metrics: usbChange=0, count=0, noiseDelta=0
-Sat Nov 22 00:46:57.234 [airport]/645 @[1259260.081060] (airportProcessCommand.m:1728) dq:'com.apple.airportd.server.command.q'/tid[0x6304da] Processed events, count[  2], @[1259260.081007], took 0.000045
-Sat Nov 22 00:46:57.234 [airport]/645 @[1259260.082517] (airportProcessCommand.m:1728) dq:'com.apple.airportd.server.command.q'/tid[0x6304da] Processed events, count[  1], @[1259260.082346], took 0.000164
-
